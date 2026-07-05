@@ -221,7 +221,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
                              "-nocite"};
   LAMMPS *lmp = nullptr;
   try {
-    lmp = new LAMMPS(6, const_cast<char **>(ctor_args), MPI_COMM_SELF);
+    lmp = new LAMMPS(6, const_cast<char **>(ctor_args), MPI_COMM_WORLD);
 
     lmp->update->set_units(p.units_style.c_str());
 

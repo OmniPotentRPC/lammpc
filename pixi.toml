@@ -26,8 +26,9 @@ embed = { features = ["embed"] }
 platforms = ["linux-64"]
 
 [feature.embed.dependencies]
-lammps = "*"
-openmpi = "*"
+cmake = ">=3.24"
+cxx-compiler = ">=1.8.0,<2"
 
 [feature.embed.tasks]
-test-embed = { cmd = "meson setup build-embed -Dwith_tests=true -Dwith_lammps=true && meson compile -C build-embed && meson test -C build-embed --print-errorlogs", description = "Embed suite against real liblammps (LJ analytic E2E)" }
+build-lammps = { cmd = "bash scripts/build_lammps.sh", description = "Fetch and build serial liblammps into .lammps-install (cached in CI)" }
+test-embed = { cmd = "meson setup build-embed -Dwith_tests=true -Dwith_lammps=true -Dlammps_root=$PWD/.lammps-install && meson compile -C build-embed && meson test -C build-embed --print-errorlogs", description = "Embed suite against real liblammps (LJ analytic E2E)" }

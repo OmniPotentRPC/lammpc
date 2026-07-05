@@ -66,11 +66,29 @@ lammpc_stub_dep = declare_dependency(
 with_lammps = get_option('with_lammps')
 if with_lammps
   add_languages('cpp', native: false)
-  liblammps_dep = dependency('liblammps')
-  mpi_dep = dependency('mpi', language: 'cpp')
+  cpp = meson.get_compiler('cpp')
+  lammps_root = get_option('lammps_root')
+  if lammps_root == ''
+    error('with_lammps needs -Dlammps_root pointing at the LAMMPS install (lib/ + include-src/ source headers)')
+  endif
+  # conda-forge lammps ships only library.h; the direct-internals embed
+  # compiles against the kept LAMMPS source headers (include-src = src/).
+  liblammps = cpp.find_library(
+    'lammps',
+    dirs: [lammps_root / 'lib', lammps_root / 'lib64'],
+  )
+  liblammps_dep = declare_dependency(
+    dependencies: liblammps,
+    include_directories: include_directories(
+      lammps_root / 'include-src',
+      lammps_root / 'include-src' / 'STUBS',
+    ),
+    link_args: ['-Wl,-rpath,' + lammps_root / 'lib',
+                '-Wl,-rpath,' + lammps_root / 'lib64'],
+  )
   lammpc_backend_sources = ['src/lammpc_embed.cpp']
-  lammpc_backend_deps = [liblammps_dep, mpi_dep]
-  lammpc_backend_cpp_args = []
+  lammpc_backend_deps = [liblammps_dep]
+  lammpc_backend_cpp_args = ['-std=c++17']
 else
   lammpc_backend_sources = ['src/lammpc_stub.c']
   lammpc_backend_deps = []

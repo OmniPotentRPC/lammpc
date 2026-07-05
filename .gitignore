@@ -2,3 +2,4 @@ build*/
 .pixi/
 *.o
 *.so
+.lammps-install/

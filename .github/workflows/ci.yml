@@ -37,5 +37,12 @@ jobs:
         with:
           pixi-version: latest
           cache: true
+      - name: Cache liblammps
+        uses: actions/cache@v4
+        with:
+          path: .lammps-install
+          key: liblammps-stable_22Jul2025-serial-v1
+      - name: Build liblammps (on cache miss)
+        run: pixi run -e embed build-lammps
       - name: Embed suite (real liblammps, LJ analytic E2E)
         run: pixi run -e embed test-embed
