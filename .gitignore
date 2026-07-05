@@ -1,0 +1,5 @@
+build*/
+.pixi/
+pixi.lock
+*.o
+*.so

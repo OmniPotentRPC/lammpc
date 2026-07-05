@@ -1,0 +1,3 @@
+option('with_tests', type: 'boolean', value: true, description: 'Build tests')
+option('with_lammps', type: 'boolean', value: false, description: 'Build the real LAMMPS embed library')
+option('lammps_root', type: 'string', value: '', description: 'LAMMPS install prefix providing liblammps and library.h')
