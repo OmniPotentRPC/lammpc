@@ -14,15 +14,20 @@ is [potentials-schema](https://github.com/OmniPotentRPC/potentials-schema)
 The acceptance bar: the rgpot -> lammpc session path is FASTER per step than
 eOn's current LAMMPS call style. The design decisions that carry that bar:
 
-- One persistent LAMMPS instance per session (`lammpc_session_create_from_config`);
-  the interaction model (units / pair_style / pair_coeff / type map) is
-  parsed once from `LammpsParams`, never per step.
-- Per-step geometry moves through native array scatter/gather
-  (`lammps_scatter_atoms` / `lammps_gather_atoms` family), not command text.
-- The step evaluation runs `run 0 pre yes post no`-equivalent minimal
-  re-neighboring; no file traffic, no log parsing, no subprocess.
+- One persistent LAMMPS instance per session
+  (`lammpc_session_create_from_config`); the interaction model
+  (units / pair style / coefficients / type map) is applied once from
+  `LammpsParams` by calling the actual LAMMPS functions on the instance --
+  pair creation and coefficient setup on the Pair object, box and atom setup
+  through the Domain/Atom objects. No command-string parsing anywhere, at
+  setup or in the loop.
+- Per-step geometry writes straight into the instance's position arrays;
+  forces read straight from the force arrays and energy from the pair
+  accumulators after the direct pair compute call. No file traffic, no log
+  parsing, no subprocess.
 - The benchmark comparing both paths on the same pair style and geometry
-  sequence is the merge gate for the embed shell.
+  sequence (eOn checkout: `TheochemUI/eOn`) is the merge gate for the embed
+  build.
 
 ## Layout
 
@@ -59,5 +64,5 @@ pixi run test-stub          # stub + cmocka suites
 pixi run test-stub-sanitize # same under ASan/UBSan
 ```
 
-The embed shell links liblammps (`-Dwith_lammps=true -Dlammps_root=...`)
-through the LAMMPS C library interface (`library.h`).
+The embed build links liblammps (`-Dwith_lammps=true -Dlammps_root=...`) and
+calls its actual functions directly; there is no command-string layer.

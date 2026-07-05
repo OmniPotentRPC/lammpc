@@ -12,10 +12,10 @@
  * Matches the shared-library soversion and lammpc_abi_version(); bumps only on
  * incompatible signature changes. Conforms to the minimum potential ABI
  * profile (potentials-schema PROFILE.md): flat binary Cap'n Proto messages in
- * both directions, plain C calls in-process. The embed shell drives LAMMPS
- * through its C library interface (lammps_open / lammps_command /
- * lammps_gather_atoms family) with per-step geometry scattered natively --
- * no input scripts and no file traffic in the force loop.
+ * both directions, plain C calls in-process. The embed build calls the actual
+ * liblammps functions directly -- instance creation, pair setup and pair
+ * compute, position/force array access -- with no command-string parsing, no
+ * input scripts, and no file traffic anywhere in the force loop.
  */
 #define LAMMPC_ABI_VERSION 0
 

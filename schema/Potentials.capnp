@@ -1955,11 +1955,11 @@ struct MetatomicParams {
 # @struct LammpsParams
 # @brief LAMMPS backend arm driving the lammpc dynlib shim.
 #
-# lammpc makes direct in-process calls through the LAMMPS C library interface
-# (lammps_open / lammps_command / lammps_gather_atoms family): no input
-# scripts, no per-step string decks, no file traffic in the force loop.
-# Geometry arrives per step via ForceInput; these fields fix the interaction
-# model once per session.
+# lammpc calls the actual liblammps functions directly, in process: instance
+# creation, pair setup and pair compute, position/force array access. No
+# command-string parsing, no input scripts, no file traffic anywhere in the
+# force loop. Geometry arrives per step via ForceInput; these fields fix the
+# interaction model once per session.
 struct LammpsParams {
   unitsStyle @0 :Text = "metal";  # LAMMPS units; metal => eV / Angstrom.
   atomStyle  @1 :Text = "atomic";
