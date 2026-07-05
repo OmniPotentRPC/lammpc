@@ -18,3 +18,16 @@ python = ">=3.10,<4"
 [tasks]
 test-stub = { cmd = "meson setup build -Dwith_tests=true && meson compile -C build && meson test -C build --print-errorlogs", description = "Configure, build, and test the stub" }
 test-stub-sanitize = { cmd = "meson setup build-sanitize -Dwith_tests=true -Db_sanitize=address,undefined -Db_lundef=false && meson compile -C build-sanitize && ASAN_OPTIONS=detect_leaks=0 meson test -C build-sanitize --print-errorlogs", description = "Stub suite under ASan/UBSan" }
+
+[environments]
+embed = { features = ["embed"] }
+
+[feature.embed]
+platforms = ["linux-64"]
+
+[feature.embed.dependencies]
+lammps = "*"
+openmpi = "*"
+
+[feature.embed.tasks]
+test-embed = { cmd = "meson setup build-embed -Dwith_tests=true -Dwith_lammps=true && meson compile -C build-embed && meson test -C build-embed --print-errorlogs", description = "Embed suite against real liblammps (LJ analytic E2E)" }

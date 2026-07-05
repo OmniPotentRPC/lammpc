@@ -63,18 +63,39 @@ lammpc_stub_dep = declare_dependency(
   include_directories: inc,
 )
 
-# Stub shared library exporting the full profile for dlopen consumers
-# (rgpot ProfileLoader conformance); capabilities answers with
-# available = false.
+with_lammps = get_option('with_lammps')
+if with_lammps
+  add_languages('cpp', native: false)
+  liblammps_dep = dependency('liblammps')
+  mpi_dep = dependency('mpi', language: 'cpp')
+  lammpc_backend_sources = ['src/lammpc_embed.cpp']
+  lammpc_backend_deps = [liblammps_dep, mpi_dep]
+  lammpc_backend_cpp_args = []
+else
+  lammpc_backend_sources = ['src/lammpc_stub.c']
+  lammpc_backend_deps = []
+  lammpc_backend_cpp_args = []
+endif
+
+# Shared library exporting the full profile for dlopen consumers (rgpot
+# ProfileLoader). The stub flavour answers capabilities with
+# available = false; the embed flavour calls liblammps directly.
 lammpc_shared = shared_library(
   'lammpc',
-  ['src/lammpc_stub.c', 'src/lammpc_features.c', 'src/lammpc_capabilities.c'] +
+  lammpc_backend_sources +
+  ['src/lammpc_features.c', 'src/lammpc_capabilities.c'] +
   lammpc_params_sources,
   include_directories: [inc] + lammpc_params_includes,
-  dependencies: lammpc_params_deps,
+  dependencies: lammpc_params_deps + lammpc_backend_deps,
   c_args: common_c_args,
+  cpp_args: lammpc_backend_cpp_args,
   soversion: meson.project_version().split('.')[0],
   install: true,
+)
+
+lammpc_shared_dep = declare_dependency(
+  link_with: lammpc_shared,
+  include_directories: inc,
 )
 
 install_headers('include/lammpc.h', 'include/lammpc_features.h')
@@ -114,4 +135,18 @@ if get_option('with_tests')
     ),
     suite: ['params'],
   )
+  if with_lammps
+    test(
+      'embed-lj-e2e',
+      executable(
+        'test_embed_lj_e2e',
+        ['tests/test_embed_lj_e2e.c'] + lammpc_params_sources,
+        dependencies: [lammpc_shared_dep, cmocka_dep] + lammpc_params_deps,
+        include_directories: [inc] + lammpc_params_includes,
+        c_args: common_c_args,
+      ),
+      suite: ['e2e'],
+      timeout: 120,
+    )
+  endif
 endif

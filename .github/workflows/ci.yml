@@ -28,3 +28,14 @@ jobs:
           cache: true
       - name: Stub suite under ASan/UBSan
         run: pixi run test-stub-sanitize
+
+  embed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.3
+        with:
+          pixi-version: latest
+          cache: true
+      - name: Embed suite (real liblammps, LJ analytic E2E)
+        run: pixi run -e embed test-embed
