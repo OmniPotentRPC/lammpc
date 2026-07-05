@@ -77,12 +77,12 @@ if with_lammps
     'lammps',
     dirs: [lammps_root / 'lib', lammps_root / 'lib64'],
   )
+  # Raw -I flags: the install dir may sit inside the source tree, which
+  # include_directories() refuses for absolute paths.
   liblammps_dep = declare_dependency(
     dependencies: liblammps,
-    include_directories: include_directories(
-      lammps_root / 'include-src',
-      lammps_root / 'include-src' / 'STUBS',
-    ),
+    compile_args: ['-I' + lammps_root / 'include-src',
+                   '-I' + lammps_root / 'include-src' / 'STUBS'],
     link_args: ['-Wl,-rpath,' + lammps_root / 'lib',
                 '-Wl,-rpath,' + lammps_root / 'lib64'],
   )
