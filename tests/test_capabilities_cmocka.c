@@ -46,6 +46,16 @@ static void test_capabilities_round_trip(void **state) {
   assert_int_equal(view.abiVersion, lammpc_abi_version());
   assert_int_equal(view.available ? 1 : 0, lammpc_available() ? 1 : 0);
   assert_true(view.schemaVersion.len > 0);
+  assert_true(text_equals(view.protocolFamily, "rgpot.potentials"));
+  assert_int_equal(view.protocolMajor, 1);
+  assert_int_equal(view.protocolMinor, 0);
+  assert_true(text_equals(view.schemaId, "bd1f89fa17369103"));
+  assert_int_equal(view.bridgeAbiMajor, 1);
+  assert_int_equal(view.bridgeAbiMinor, 0);
+  assert_int_equal(view.bridgeLayout, 1);
+  assert_int_equal(view.dlpackMajor, 1);
+  assert_int_equal(view.dlpackMinor, 0);
+  assert_int_equal(view.bridgeFeatures, 0);
 
   capn_resolve(&view.operations.p);
   assert_int_equal(view.operations.p.len, 3);
