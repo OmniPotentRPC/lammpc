@@ -78,6 +78,16 @@ struct Capabilities {
   loweredCommonFields @5 :List(Text); # CommonMethodSpec field names the overlay lowers.
   configKinds    @6 :List(Text); # PotentialConfig arms accepted, e.g. "nwchem".
   schemaVersion  @7 :Text;  # Potentials.capnp release the backend compiled against.
+  protocolFamily @8 :Text;
+  protocolMajor  @9 :UInt16;
+  protocolMinor  @10 :UInt16;
+  schemaId       @11 :Text;
+  bridgeAbiMajor @12 :UInt16;
+  bridgeAbiMinor @13 :UInt16;
+  bridgeLayout   @14 :UInt32;
+  dlpackMajor    @15 :UInt16;
+  dlpackMinor    @16 :UInt16;
+  bridgeFeatures @17 :UInt64;
 
   enum Operation {
     energy         @0;

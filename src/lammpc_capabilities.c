@@ -74,6 +74,16 @@ int lammpc_capabilities_result(void *capabilities_capnp,
   view.configKinds = kind_list;
   view.schemaVersion = (capn_text){(int)strlen(LAMMPC_SCHEMA_VERSION),
                                    LAMMPC_SCHEMA_VERSION, NULL};
+  view.protocolFamily = (capn_text){15, "rgpot.potentials", NULL};
+  view.protocolMajor = 1;
+  view.protocolMinor = 0;
+  view.schemaId = (capn_text){16, "bd1f89fa17369103", NULL};
+  view.bridgeAbiMajor = 1;
+  view.bridgeAbiMinor = 0;
+  view.bridgeLayout = 1;
+  view.dlpackMajor = 1;
+  view.dlpackMinor = 0;
+  view.bridgeFeatures = 0;
   write_Capabilities(&view, caps);
   if (capn_setp(root, 0, caps.p) != 0) {
     capn_free(&arena);
