@@ -1962,6 +1962,21 @@ struct MetatomicParams {
   }
 }
 
+# @struct UmaParams
+# @brief UMA / OMol AOTInductor backend arm, mirroring rgpot's UmaConfig so
+# model selection travels on the shared wire. The package is a per-composition
+# .pt2 export carrying its runtime contract (molecular_box / cutoff / z_set)
+# as embedded AOTI metadata, which stays authoritative for values it holds.
+struct UmaParams {
+  modelPath    @0 :Text;          # AOTInductor .pt2 package path.
+  taskName     @1 :Text = "omol"; # UMA task head.
+  device       @2 :Text = "cpu";  # torch device string.
+  charge       @3 :Int32 = 0;     # Total charge.
+  spin         @4 :Int32 = 1;     # Spin multiplicity.
+  cutoff       @5 :Float64 = 0.0; # Angstrom; <=0 keeps UmaConfig/sidecar value.
+  maxNeighbors @6 :Int32 = 0;     # <=0 keeps UmaConfig/sidecar value.
+}
+
 # @struct LammpsParams
 # @brief LAMMPS backend arm driving the lammpc dynlib shim.
 #
