@@ -149,6 +149,20 @@ int lammpc_session_md_state(
     LammpcMdObservation *observation);
 
 /**
+ * @brief Evaluate raw arrays on a persistent session.
+ *
+ * Positions and the optional 3x3 row-major cell are in Angstrom. Energy is
+ * returned in `LammpcResult::energy_h`, gradients in Hartree/Bohr, and the
+ * optional row-major Cauchy stress in Hartree/Bohr^3. The atomic numbers
+ * select the configured type map when the session first builds its LAMMPS
+ * instance.
+ */
+LammpcResult lammpc_session_energy_gradient(
+    LammpcSession *session, int n_atoms, const double *positions_ang,
+    const int *atomic_numbers, const void *cell_ang, size_t cell_len,
+    double *gradient_h_bohr, double *stress_h_bohr3);
+
+/**
  * @brief One step on a persistent session: `ForceInput` bytes in,
  * `PotentialResult` bytes out. This is the BOMD force-loop entry point for
  * rgpot callers driving dynamics. Geometry setup fails loudly when LAMMPS

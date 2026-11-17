@@ -142,6 +142,21 @@ int lammpc_session_md_state(
   return -1;
 }
 
+LammpcResult lammpc_session_energy_gradient(
+    LammpcSession *session, int n_atoms, const double *positions_ang,
+    const int *atomic_numbers, const void *cell_ang, size_t cell_len,
+    double *gradient_h_bohr, double *stress_h_bohr3) {
+  (void)session;
+  (void)n_atoms;
+  (void)positions_ang;
+  (void)atomic_numbers;
+  (void)cell_ang;
+  (void)cell_len;
+  (void)gradient_h_bohr;
+  (void)stress_h_bohr3;
+  return stub_fail();
+}
+
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,
     size_t force_input_capnp_size_bytes, void *potential_result_capnp,

@@ -1062,6 +1062,44 @@ LammpcResult lammpc_session_calculate_result(
   return r;
 }
 
+LammpcResult lammpc_session_energy_gradient(
+    LammpcSession *session, int n_atoms, const double *positions_ang,
+    const int *atomic_numbers, const void *cell_ang_raw, size_t cell_len,
+    double *gradient_h_bohr, double *stress_h_bohr3) {
+  if (!session || n_atoms <= 0 || !positions_ang || !atomic_numbers ||
+      !gradient_h_bohr)
+    return fail_result("invalid arguments");
+  if (cell_len != 0 && (cell_len != 9 || !cell_ang_raw))
+    return fail_result("cell must be absent or contain nine doubles");
+
+  const int has_cell = cell_len == 9;
+  const double empty_cell[9] = {0};
+  const double *cell_ang =
+      has_cell ? static_cast<const double *>(cell_ang_raw) : empty_cell;
+  if (!geometry_matches(session, static_cast<size_t>(n_atoms), cell_ang,
+                        has_cell) &&
+      build_instance(session, static_cast<size_t>(n_atoms), positions_ang,
+                     atomic_numbers, cell_ang, has_cell) != 0)
+    return fail_result(g_last_error);
+
+  double energy_h = 0.0;
+  std::vector<double> forces_h_bohr(static_cast<size_t>(n_atoms) * 3u);
+  double stress[9] = {0};
+  if (evaluate(session, static_cast<size_t>(n_atoms), positions_ang, &energy_h,
+               forces_h_bohr.data(), stress) != 0)
+    return fail_result(g_last_error);
+  for (size_t i = 0; i < forces_h_bohr.size(); ++i)
+    gradient_h_bohr[i] = -forces_h_bohr[i];
+  if (stress_h_bohr3)
+    std::memcpy(stress_h_bohr3, stress, sizeof(stress));
+
+  LammpcResult result;
+  result.ok = 1;
+  result.energy_h = energy_h;
+  std::snprintf(result.message, sizeof(result.message), "ok");
+  return result;
+}
+
 LammpcResult lammpc_calculate_result(const void *params_capnp,
                                      size_t params_capnp_size_bytes,
                                      const void *force_input_capnp,

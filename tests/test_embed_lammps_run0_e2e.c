@@ -268,6 +268,34 @@ static void eval_lammpc(const unsigned char *config, size_t config_size,
   lammpc_session_destroy(session);
 }
 
+static void eval_lammpc_raw(const unsigned char *config, size_t config_size,
+                            const double *positions, const int *z, int n_atoms,
+                            const double box9[9], double *energy,
+                            double *forces, double stress9[9]) {
+  const double ev_per_hartree = 27.211386245988;
+  const double angstrom_per_bohr = 0.529177210903;
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  double *gradient = calloc((size_t)n_atoms * 3, sizeof(double));
+  assert_non_null(gradient);
+  double raw_stress[9] = {0};
+  LammpcResult result = lammpc_session_energy_gradient(
+      session, n_atoms, positions, z, box9, 9, gradient, raw_stress);
+  if (!result.ok)
+    fail_msg("lammpc raw eval failed: %s", result.message);
+  *energy = result.energy_h * ev_per_hartree;
+  for (int i = 0; i < n_atoms * 3; ++i)
+    forces[i] = -gradient[i] * ev_per_hartree / angstrom_per_bohr;
+  const double stress_factor =
+      ev_per_hartree / (angstrom_per_bohr * angstrom_per_bohr *
+                        angstrom_per_bohr);
+  for (int i = 0; i < 9; ++i)
+    stress9[i] = raw_stress[i] * stress_factor;
+  free(gradient);
+  lammpc_session_destroy(session);
+}
+
 static void finite_difference_force_check(const unsigned char *config,
                                           size_t config_size, double *positions,
                                           const int *z, int n_atoms,
@@ -320,6 +348,14 @@ static void check_case(const char *pair_style, const char *pair_coeff,
   double e_lammpc = 0.0, f_lammpc[24] = {0}, s_lammpc[9] = {0};
   eval_lammpc(config, config_size, step, step_size, n_atoms, &e_lammpc,
               f_lammpc, s_lammpc);
+  double e_raw = 0.0, f_raw[24] = {0}, s_raw[9] = {0};
+  eval_lammpc_raw(config, config_size, positions, zs, n_atoms, box9, &e_raw,
+                  f_raw, s_raw);
+  assert_true(fabs(e_raw - e_lammpc) < 1e-10);
+  for (int i = 0; i < 3 * n_atoms; ++i)
+    assert_true(fabs(f_raw[i] - f_lammpc[i]) < 1e-10);
+  for (int i = 0; i < 9; ++i)
+    assert_true(fabs(s_raw[i] - s_lammpc[i]) < 1e-10);
 
   double e_lmp = 0.0, f_lmp[24] = {0}, s_lmp[6] = {0};
   char mass_line[64];
