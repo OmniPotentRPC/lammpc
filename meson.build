@@ -99,8 +99,17 @@ else
 endif
 
 # Registered on the live instance from the embed. Kept out of the stub.
+# White-box embed tests #include lammpc_embed_api.cpp instead of linking
+# liblammpc.so, so they must compile the other objects that file calls.
+# lammpc_embed_boundary_disarm lives in the fix, and the fix calls
+# lammpc_hard_boundary_apply. The LJ and run0 embed binaries link the
+# shared library, which already contains both objects.
+lammpc_embed_companion_sources = []
 if with_lammps
   lammpc_backend_sources += ['src/lammpc_fix_boundary.cpp']
+  lammpc_embed_companion_sources = [
+    'src/lammpc_fix_boundary.cpp',
+  ] + lammpc_boundary_sources
 endif
 
 # Shared library exporting the full profile for dlopen consumers (rgpot
@@ -208,7 +217,8 @@ if get_option('with_tests')
       'embed-precision-create-e2e',
       executable(
         'test_embed_precision_create_e2e',
-        ['tests/test_embed_precision_create_e2e.cpp'] + lammpc_params_sources,
+        ['tests/test_embed_precision_create_e2e.cpp'] + lammpc_params_sources +
+        lammpc_embed_companion_sources,
         dependencies: [cmocka_dep] + lammpc_params_deps + lammpc_backend_deps,
         include_directories: [inc] + lammpc_params_includes,
         c_args: common_c_args,

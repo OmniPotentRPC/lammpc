@@ -124,6 +124,11 @@ image flags as LAMMPS set them. Acceptance writes nothing.
 The force loop (=lammpc_session_calculate_result= and =run 0=) does not
 arm the fix. Arming happens only around =lammpc_session_integrate()=.
 
+=lammpc_session_destroy()= forgets the host callback and disarms the
+embed binding before it closes the LAMMPS instance. Disarm drops the
+callback even when the fix is still installed, so a later step does
+not call the host. A null instance is a no-op.
+
 * Rust
 
 lammpc has no Rust API. There is no closure adapter. A Rust host calls
@@ -148,6 +153,14 @@ build LAMMPS.
   restores the previous state and returns -1.
 - A NULL callback does not dereference its buffers. The stub session
   entry points return -1 because no LAMMPS library is linked.
+
+=tests/test_embed_lj_e2e.c= and =tests/test_embed_lammps_run0_e2e.c= link
+=liblammpc.so=, which contains =src/lammpc_fix_boundary.cpp= and
+=src/lammpc_boundary.c=. =tests/test_embed_precision_create_e2e.cpp=
+includes =src/lammpc_embed_api.cpp= so it can read the live handle, and
+the binary compiles those two companion sources with it. That test
+attaches the fix, checks that one step calls the host, disarms, and
+checks that the next step does not.
 
 * Smoke
 

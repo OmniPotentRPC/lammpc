@@ -189,11 +189,64 @@ static void test_atom_count_mismatch_fails_loudly(void **state) {
   lammpc_session_destroy(session);
 }
 
+static int count_boundary_calls(void *user, int n_atoms, double *positions,
+                                double *velocities,
+                                const LammpcBoundaryBox *box) {
+  (void)n_atoms;
+  (void)positions;
+  (void)velocities;
+  (void)box;
+  int *calls = static_cast<int *>(user);
+  *calls += 1;
+  return LAMMPC_BOUNDARY_ACCEPT;
+}
+
+/*
+ * Destroy drops the host callback before it closes LAMMPS. Attach the
+ * fix, prove one step calls the host, disarm, and prove the next step
+ * does not. The fix stays installed across that second step, so a disarm
+ * that does not clear the binding still invokes the host.
+ */
+static void test_destroy_disarms_hard_boundary(void **state) {
+  (void)state;
+  lammpc_embed_boundary_disarm(nullptr);
+
+  LammpcSession *session = session_from_config("f f f");
+  const double box9[9] = {10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0};
+  const int z[2] = {14, 14};
+  const double pos[6] = {1.0, 1.0, 1.0, 2.0, 2.0, 2.0};
+  LammpcResult r = run_step(session, pos, z, 2, box9);
+  if (!r.ok)
+    fail_msg("disarm setup evaluation failed: %s", r.message);
+
+  int calls = 0;
+  assert_int_equal(
+      lammpc_session_set_hard_boundary(session, count_boundary_calls, &calls),
+      0);
+  assert_int_equal(
+      lammpc_embed_boundary_attach(session->lmp, count_boundary_calls, &calls),
+      0);
+  assert_int_equal(calls, 0);
+  if (run_cmd(session->lmp, "timestep 0.001") != 0 ||
+      run_cmd(session->lmp, "fix 1 all nve") != 0 ||
+      run_cmd(session->lmp, "run 1") != 0)
+    fail_msg("armed step failed: %s", lammpc_last_error());
+  assert_int_equal(calls, 1);
+
+  calls = 0;
+  forget_hard_boundary(session);
+  if (run_cmd(session->lmp, "run 1") != 0)
+    fail_msg("disarmed step failed: %s", lammpc_last_error());
+  assert_int_equal(calls, 0);
+  lammpc_session_destroy(session);
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_upper_face_precision_orthogonal),
       cmocka_unit_test(test_upper_face_precision_triclinic),
       cmocka_unit_test(test_atom_count_mismatch_fails_loudly),
+      cmocka_unit_test(test_destroy_disarms_hard_boundary),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
