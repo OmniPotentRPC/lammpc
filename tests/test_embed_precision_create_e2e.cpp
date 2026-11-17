@@ -1,0 +1,199 @@
+#include "lammpc.h"
+#include "lammpc_params.h"
+
+#include <math.h>
+#include <setjmp.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <cmath>
+#include <vector>
+
+/*
+ * Reuse the production embed implementation directly so this test can inspect
+ * the live LAMMPS handle and assert post-create coordinates bit-for-bit.
+ */
+#include "../src/lammpc_embed_api.cpp"
+
+extern "C" {
+#include <cmocka.h>
+}
+
+static size_t write_flat(struct capn *arena, capn_ptr root_struct,
+                         unsigned char *dst, size_t dst_size) {
+  capn_ptr root = capn_root(arena);
+  assert_int_equal(capn_setp(root, 0, root_struct), 0);
+  int written = capn_write_mem(arena, dst, dst_size, 0);
+  assert_true(written > 0);
+  return (size_t)written;
+}
+
+static size_t make_config(const char *boundary, unsigned char *dst,
+                          size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  capn_ptr coeffs = capn_new_ptr_list(seg, 1);
+  capn_text coeff = {3, "* *", 0};
+  assert_int_equal(capn_set_text(coeffs, 0, coeff), 0);
+  capn_list32 type_map = capn_new_list32(seg, 1);
+  capn_set32(type_map, 0, 14);
+  capn_list64 masses = capn_new_list64(seg, 1);
+  capn_set64(masses, 0, capn_from_f64(28.0855));
+
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.atomStyle = (capn_text){6, "atomic", NULL};
+  pview.pairStyle = (capn_text){8, "zero 8.0", NULL};
+  pview.pairCoeffs = coeffs;
+  pview.typeToAtomicNumber = type_map;
+  pview.masses = masses;
+  pview.newtonPair = 1;
+  pview.boundary = (capn_text){(int)strlen(boundary), (char *)boundary, NULL};
+  write_LammpsParams(&pview, params);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  write_PotentialConfig(&cview, config);
+
+  size_t written = write_flat(&arena, config.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static size_t make_step(const double *positions_ang, const int *z, int n_atoms,
+                        const double *box9, unsigned char *dst,
+                        size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  ForceInput_ptr input = new_ForceInput(seg);
+  capn_list64 pos = capn_new_list64(seg, n_atoms * 3);
+  for (int i = 0; i < n_atoms * 3; ++i)
+    capn_set64(pos, i, capn_from_f64(positions_ang[i]));
+  capn_list32 atmnrs = capn_new_list32(seg, n_atoms);
+  for (int i = 0; i < n_atoms; ++i)
+    capn_set32(atmnrs, i, z[i]);
+
+  struct ForceInput view;
+  memset(&view, 0, sizeof(view));
+  view.pos = pos;
+  view.atmnrs = atmnrs;
+  capn_list64 box = capn_new_list64(seg, 9);
+  for (int i = 0; i < 9; ++i)
+    capn_set64(box, i, capn_from_f64(box9[i]));
+  view.box = box;
+  view.lengthUnit = (capn_text){8, "angstrom", NULL};
+  view.energyUnit = (capn_text){2, "eV", NULL};
+  write_ForceInput(&view, input);
+
+  size_t written = write_flat(&arena, input.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static LammpcSession *session_from_config(const char *boundary) {
+  unsigned char config[16384];
+  size_t config_size = make_config(boundary, config, sizeof(config));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  return session;
+}
+
+static LammpcResult run_step(LammpcSession *session, const double *positions_ang,
+                             const int *z, int n_atoms, const double *box9) {
+  unsigned char step[16384];
+  size_t step_size =
+      make_step(positions_ang, z, n_atoms, box9, step, sizeof(step));
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  std::vector<unsigned char> out(need);
+  size_t wrote = 0;
+  LammpcResult r = lammpc_session_calculate_result(session, step, step_size,
+                                                   out.data(), out.size(),
+                                                   &wrote);
+  return r;
+}
+
+static void assert_positions_bit_identical(LammpcSession *session,
+                                           const double *expected,
+                                           int n_atoms) {
+  std::vector<double> got((size_t)n_atoms * 3u, 0.0);
+  lammps_gather_atoms(session->lmp, "x", 1, 3, got.data());
+  for (int i = 0; i < n_atoms * 3; ++i)
+    assert_memory_equal(&got[i], &expected[i], sizeof(double));
+}
+
+static void test_upper_face_precision_orthogonal(void **state) {
+  (void)state;
+  LammpcSession *session = session_from_config("p p p");
+  const double box9[9] = {10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0};
+  const int z[2] = {14, 14};
+  const double near = 10.0 - 1.0e-9;
+  const double pos[6] = {0.125, 0.25, 0.5, near, near, near};
+
+  LammpcResult r = run_step(session, pos, z, 2, box9);
+  if (!r.ok)
+    fail_msg("orthogonal near-face evaluation failed: %s", r.message);
+
+  assert_int_equal((int)llround(lammps_get_natoms(session->lmp)), 2);
+  assert_positions_bit_identical(session, pos, 2);
+  lammpc_session_destroy(session);
+}
+
+static void test_upper_face_precision_triclinic(void **state) {
+  (void)state;
+  LammpcSession *session = session_from_config("p p p");
+  const double box9[9] = {8.0, 0.0, 0.0, 1.0, 8.0, 0.0, 0.5, 0.25, 8.0};
+  const int z[2] = {14, 14};
+  const double eps = std::ldexp(1.0, -40);
+  const double s = 1.0 - eps;
+  const double pos[6] = {
+      0.25, 0.5, 0.75,
+      box9[0] * s + box9[3] * s + box9[6] * s,
+      box9[4] * s + box9[7] * s,
+      box9[8] * s,
+  };
+
+  LammpcResult r = run_step(session, pos, z, 2, box9);
+  if (!r.ok)
+    fail_msg("triclinic near-face evaluation failed: %s", r.message);
+
+  assert_int_equal((int)llround(lammps_get_natoms(session->lmp)), 2);
+  assert_positions_bit_identical(session, pos, 2);
+  lammpc_session_destroy(session);
+}
+
+static void test_atom_count_mismatch_fails_loudly(void **state) {
+  (void)state;
+  LammpcSession *session = session_from_config("f f f");
+  const double box9[9] = {10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0};
+  const int z[2] = {14, 14};
+  const double pos[6] = {0.1, 0.1, 0.1, 10.0, 5.0, 5.0};
+
+  LammpcResult r = run_step(session, pos, z, 2, box9);
+  assert_int_equal(r.ok, 0);
+  assert_non_null(strstr(r.message, "atom count mismatch"));
+  lammpc_session_destroy(session);
+}
+
+int main(void) {
+  const struct CMUnitTest tests[] = {
+      cmocka_unit_test(test_upper_face_precision_orthogonal),
+      cmocka_unit_test(test_upper_face_precision_triclinic),
+      cmocka_unit_test(test_atom_count_mismatch_fails_loudly),
+  };
+  return cmocka_run_group_tests(tests, NULL, NULL);
+}
