@@ -12,10 +12,11 @@
  * Matches the shared-library soversion and lammpc_abi_version(); bumps only on
  * incompatible signature changes. Conforms to the minimum potential ABI
  * profile (potentials-schema PROFILE.md): flat binary Cap'n Proto messages in
- * both directions, plain C calls in-process. The embed build calls the actual
- * liblammps functions directly -- instance creation, pair setup and pair
- * compute, position/force array access -- with no command-string parsing, no
- * input scripts, and no file traffic anywhere in the force loop.
+ * both directions, plain C calls in-process. The embed build uses direct
+ * liblammps calls for atom arrays and pair evaluation. Setup still uses a
+ * small command set for region/box/mass lines, formatted at `%.17g` for
+ * floating values. Atom creation is a full-precision batched
+ * `lammps_create_atoms` path with a hard atom-count consistency check.
  */
 #define LAMMPC_ABI_VERSION 0
 
@@ -150,7 +151,8 @@ int lammpc_session_md_state(
 /**
  * @brief One step on a persistent session: `ForceInput` bytes in,
  * `PotentialResult` bytes out. This is the BOMD force-loop entry point for
- * rgpot callers driving dynamics.
+ * rgpot callers driving dynamics. Geometry setup fails loudly when LAMMPS
+ * creates fewer or more atoms than requested.
  */
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,

@@ -2,12 +2,15 @@
 #include "lammpc_params.h"
 
 #include "library.h"
+#include "minimage.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -127,6 +130,43 @@ struct LammpcSession {
   uint64_t md_rng[4] = {0, 0, 0, 0};
 };
 
+struct LammpsBounds {
+  double xlo = 0.0;
+  double xhi = 0.0;
+  double ylo = 0.0;
+  double yhi = 0.0;
+  double zlo = 0.0;
+  double zhi = 0.0;
+  double xy = 0.0;
+  double xz = 0.0;
+  double yz = 0.0;
+  bool triclinic = false;
+};
+
+std::string format_double17(double value) {
+  char buffer[64] = {0};
+  std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+  return std::string(buffer);
+}
+
+std::string minimage_last_error_or(const char *fallback) {
+  const char *msg = mi_last_error();
+  if (msg && msg[0] != '\0')
+    return std::string(msg);
+  return std::string(fallback);
+}
+
+bool boundary_is_fully_periodic(const std::string &boundary) {
+  std::istringstream tokens(boundary);
+  std::string bx, by, bz;
+  if (!(tokens >> bx >> by >> bz))
+    return false;
+  auto is_periodic = [](const std::string &token) {
+    return !token.empty() && (token[0] == 'p' || token[0] == 'P');
+  };
+  return is_periodic(bx) && is_periodic(by) && is_periodic(bz);
+}
+
 int type_for_atomic_number(const DecodedParams &params, int z) {
   for (size_t t = 0; t < params.type_to_z.size(); ++t)
     if (params.type_to_z[t] == z)
@@ -184,6 +224,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   }
 
   std::string region_cmd;
+  LammpsBounds bounds;
   if (has_cell) {
     if (std::fabs(cell_ang[1]) > 1e-12 || std::fabs(cell_ang[2]) > 1e-12 ||
         std::fabs(cell_ang[5]) > 1e-12) {
@@ -196,11 +237,25 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       lammps_close(lmp);
       return -1;
     }
-    region_cmd = "region box prism 0 " + std::to_string(cell_ang[0]) + " 0 " +
-                 std::to_string(cell_ang[4]) + " 0 " +
-                 std::to_string(cell_ang[8]) + " " + std::to_string(cell_ang[3]) +
-                 " " + std::to_string(cell_ang[6]) + " " +
-                 std::to_string(cell_ang[7]) + " units box";
+    bounds.xlo = 0.0;
+    bounds.xhi = cell_ang[0];
+    bounds.ylo = 0.0;
+    bounds.yhi = cell_ang[4];
+    bounds.zlo = 0.0;
+    bounds.zhi = cell_ang[8];
+    bounds.xy = cell_ang[3];
+    bounds.xz = cell_ang[6];
+    bounds.yz = cell_ang[7];
+    bounds.triclinic = true;
+    region_cmd = "region box prism " + format_double17(bounds.xlo) + " " +
+                 format_double17(bounds.xhi) + " " +
+                 format_double17(bounds.ylo) + " " +
+                 format_double17(bounds.yhi) + " " +
+                 format_double17(bounds.zlo) + " " +
+                 format_double17(bounds.zhi) + " " +
+                 format_double17(bounds.xy) + " " +
+                 format_double17(bounds.xz) + " " +
+                 format_double17(bounds.yz) + " units box";
   } else {
     double pad = 50.0;
     double mins[3] = {1e300, 1e300, 1e300};
@@ -214,12 +269,22 @@ int build_instance(LammpcSession *session, size_t n_atoms,
           maxs[d] = v;
       }
     }
-    region_cmd = "region box block " + std::to_string(mins[0] - pad) + " " +
-                 std::to_string(maxs[0] + pad) + " " +
-                 std::to_string(mins[1] - pad) + " " +
-                 std::to_string(maxs[1] + pad) + " " +
-                 std::to_string(mins[2] - pad) + " " +
-                 std::to_string(maxs[2] + pad) + " units box";
+    bounds.xlo = mins[0] - pad;
+    bounds.xhi = maxs[0] + pad;
+    bounds.ylo = mins[1] - pad;
+    bounds.yhi = maxs[1] + pad;
+    bounds.zlo = mins[2] - pad;
+    bounds.zhi = maxs[2] + pad;
+    bounds.xy = 0.0;
+    bounds.xz = 0.0;
+    bounds.yz = 0.0;
+    bounds.triclinic = false;
+    region_cmd = "region box block " + format_double17(bounds.xlo) + " " +
+                 format_double17(bounds.xhi) + " " +
+                 format_double17(bounds.ylo) + " " +
+                 format_double17(bounds.yhi) + " " +
+                 format_double17(bounds.zlo) + " " +
+                 format_double17(bounds.zhi) + " units box";
   }
   if (run_cmd(lmp, region_cmd) != 0) {
     lammps_close(lmp);
@@ -234,7 +299,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   for (size_t t = 0; t < p.type_to_z.size(); ++t) {
     double mass = (t < p.masses.size()) ? p.masses[t] : 1.0;
     if (run_cmd(lmp, "mass " + std::to_string((int)t + 1) + " " +
-                         std::to_string(mass)) != 0) {
+                         format_double17(mass)) != 0) {
       lammps_close(lmp);
       return -1;
     }
@@ -249,11 +314,102 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       return -1;
     }
     session->atom_types[i] = type;
-    if (run_cmd(lmp, "create_atoms " + std::to_string(type) + " single " +
-                         std::to_string(positions_ang[3 * i + 0]) + " " +
-                         std::to_string(positions_ang[3 * i + 1]) + " " +
-                         std::to_string(positions_ang[3 * i + 2]) +
-                         " units box") != 0) {
+  }
+
+  if (n_atoms > (size_t)std::numeric_limits<int>::max()) {
+    store_error("atom count exceeds lammps_create_atoms int range");
+    lammps_close(lmp);
+    return -1;
+  }
+
+  std::vector<double> creation_positions(positions_ang,
+                                         positions_ang + n_atoms * 3u);
+  if (n_atoms > 0 && boundary_is_fully_periodic(p.boundary)) {
+    mi_cell minimage_cell{};
+    if (mi_cell_from_lammps(bounds.xlo, bounds.xhi, bounds.ylo, bounds.yhi,
+                            bounds.zlo, bounds.zhi, bounds.xy, bounds.xz,
+                            bounds.yz, &minimage_cell) != 0) {
+      store_error("minimage cell construction failed: " +
+                  minimage_last_error_or("unknown minimage error"));
+      lammps_close(lmp);
+      return -1;
+    }
+    const double center[3] = {
+        minimage_cell.ox + 0.5 * (minimage_cell.ax + minimage_cell.bx +
+                                  minimage_cell.cx),
+        minimage_cell.oy + 0.5 * (minimage_cell.ay + minimage_cell.by +
+                                  minimage_cell.cy),
+        minimage_cell.oz + 0.5 * (minimage_cell.az + minimage_cell.bz +
+                                  minimage_cell.cz),
+    };
+    std::vector<double> centered(n_atoms * 3u, 0.0);
+    std::vector<double> wrapped(n_atoms * 3u, 0.0);
+    for (size_t i = 0; i < n_atoms; ++i) {
+      centered[3 * i + 0] = creation_positions[3 * i + 0] - center[0];
+      centered[3 * i + 1] = creation_positions[3 * i + 1] - center[1];
+      centered[3 * i + 2] = creation_positions[3 * i + 2] - center[2];
+    }
+    if (mi_wrap_many(&minimage_cell, centered.data(), n_atoms, wrapped.data()) !=
+        0) {
+      store_error("minimage coordinate wrapping failed: " +
+                  minimage_last_error_or("unknown minimage error"));
+      lammps_close(lmp);
+      return -1;
+    }
+    for (size_t i = 0; i < n_atoms; ++i) {
+      for (int d = 0; d < 3; ++d) {
+        const size_t k = 3 * i + (size_t)d;
+        const double candidate = center[d] + wrapped[k];
+        const double scale = std::max(
+            1.0, std::max(std::fabs(creation_positions[k]), std::fabs(candidate)));
+        const double tolerance =
+            128.0 * std::numeric_limits<double>::epsilon() * scale;
+        if (std::fabs(creation_positions[k] - candidate) > tolerance)
+          creation_positions[k] = candidate;
+      }
+    }
+  }
+
+#if defined(LAMMPS_BIGBIG)
+  std::vector<int64_t> image_flags(
+      n_atoms, lammps_encode_image_flags(0, 0, 0));
+#else
+  std::vector<int> image_flags(n_atoms, lammps_encode_image_flags(0, 0, 0));
+#endif
+  int created = 0;
+  if (n_atoms > 0) {
+    created = lammps_create_atoms(
+        lmp, (int)n_atoms, nullptr, session->atom_types.data(),
+        creation_positions.data(), nullptr, image_flags.data(), 1);
+  }
+  if (created < 0 || lammps_has_error(lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(lmp, buffer, (int)sizeof(buffer)) > 0)
+      store_error(buffer);
+    else
+      store_error("lammps_create_atoms failed");
+    lammps_close(lmp);
+    return -1;
+  }
+  const long long present = (long long)std::llround(lammps_get_natoms(lmp));
+  if (created != (int)n_atoms || present != (long long)n_atoms) {
+    char mismatch[256] = {0};
+    std::snprintf(mismatch, sizeof(mismatch),
+                  "atom count mismatch after creation: requested=%zu "
+                  "created=%d present=%lld",
+                  n_atoms, created, present);
+    store_error(mismatch);
+    lammps_close(lmp);
+    return -1;
+  }
+  if (n_atoms > 0) {
+    lammps_scatter_atoms(lmp, "x", 1, 3, creation_positions.data());
+    if (lammps_has_error(lmp)) {
+      char buffer[512] = {0};
+      if (lammps_get_last_error_message(lmp, buffer, (int)sizeof(buffer)) > 0)
+        store_error(buffer);
+      else
+        store_error("lammps_scatter_atoms after creation failed");
       lammps_close(lmp);
       return -1;
     }

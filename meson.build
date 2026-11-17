@@ -86,8 +86,9 @@ if with_lammps
     link_args: ['-Wl,-rpath,' + lammps_root / 'lib',
                 '-Wl,-rpath,' + lammps_root / 'lib64'],
   )
+  minimage_dep = dependency('minimage', fallback: ['minimage', 'minimage_dep'])
   lammpc_backend_sources = ['src/lammpc_embed_api.cpp']
-  lammpc_backend_deps = [liblammps_dep]
+  lammpc_backend_deps = [liblammps_dep, minimage_dep]
   lammpc_backend_cpp_args = ['-std=c++17']
 else
   lammpc_backend_sources = ['src/lammpc_stub.c']
@@ -176,6 +177,20 @@ if get_option('with_tests')
         dependencies: [lammpc_shared_dep, cmocka_dep] + lammpc_params_deps,
         include_directories: [inc] + lammpc_params_includes,
         c_args: common_c_args,
+      ),
+      env: lammps_root_env,
+      suite: ['e2e'],
+      timeout: 180,
+    )
+    test(
+      'embed-precision-create-e2e',
+      executable(
+        'test_embed_precision_create_e2e',
+        ['tests/test_embed_precision_create_e2e.cpp'] + lammpc_params_sources,
+        dependencies: [cmocka_dep] + lammpc_params_deps + lammpc_backend_deps,
+        include_directories: [inc] + lammpc_params_includes,
+        c_args: common_c_args,
+        cpp_args: ['-std=c++17'],
       ),
       env: lammps_root_env,
       suite: ['e2e'],
