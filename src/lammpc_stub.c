@@ -142,6 +142,48 @@ int lammpc_session_md_state(
   return -1;
 }
 
+int lammpc_session_nve_set_positions(LammpcSession *session,
+                                     const double *positions_ang,
+                                     size_t coordinate_count,
+                                     const double *cell_ang,
+                                     size_t cell_len) {
+  (void)session;
+  (void)positions_ang;
+  (void)coordinate_count;
+  (void)cell_ang;
+  (void)cell_len;
+  return -1;
+}
+
+int lammpc_session_nve_set_velocities(LammpcSession *session,
+                                      const double *velocities_ang_ps,
+                                      size_t coordinate_count) {
+  (void)session;
+  (void)velocities_ang_ps;
+  (void)coordinate_count;
+  return -1;
+}
+
+int lammpc_session_nve_step(LammpcSession *session, size_t step_count,
+                            double time_step_ps) {
+  (void)session;
+  (void)step_count;
+  (void)time_step_ps;
+  return -1;
+}
+
+int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
+                             double *velocities_ang_ps,
+                             size_t coordinate_count,
+                             LammpcNveObservation *observation) {
+  (void)session;
+  (void)positions_ang;
+  (void)velocities_ang_ps;
+  (void)coordinate_count;
+  (void)observation;
+  return -1;
+}
+
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,
     size_t force_input_capnp_size_bytes, void *potential_result_capnp,

@@ -196,5 +196,18 @@ if get_option('with_tests')
       suite: ['e2e'],
       timeout: 180,
     )
+    test(
+      'embed-nve-e2e',
+      executable(
+        'test_embed_nve_e2e',
+        ['tests/test_embed_nve_e2e.c'] + lammpc_params_sources,
+        dependencies: [lammpc_shared_dep, cmocka_dep] + lammpc_params_deps,
+        include_directories: [inc] + lammpc_params_includes,
+        c_args: common_c_args,
+      ),
+      env: lammps_root_env,
+      suite: ['e2e'],
+      timeout: 180,
+    )
   endif
 endif

@@ -67,6 +67,17 @@ typedef struct LammpcMdObservation {
 } LammpcMdObservation;
 
 /**
+ * @brief Unconstrained NVE observables in metal units.
+ *
+ * potential_energy_ev and kinetic_energy_ev are read from LAMMPS thermo
+ * after the most recent NVE propagation.
+ */
+typedef struct LammpcNveObservation {
+  double potential_energy_ev;
+  double kinetic_energy_ev;
+} LammpcNveObservation;
+
+/**
  * @brief Apply sticky interaction-model options from a flat `LammpsParams`
  * message (units/pair_style/pair_coeff/type map).
  *
@@ -147,6 +158,47 @@ int lammpc_session_md_state(
     double *velocities_ang_ps, double *projected_forces_ev_ang,
     double *removed_velocities_ang_ps, size_t coordinate_count,
     LammpcMdObservation *observation);
+
+/**
+ * @brief Set unconstrained NVE positions for an existing session geometry.
+ *
+ * coordinate_count must match 3 * atom_count of the live session geometry.
+ * If cell_ang is non-NULL then cell_len must be 9 and the simulation box is
+ * updated before positions are scattered.
+ */
+int lammpc_session_nve_set_positions(LammpcSession *session,
+                                     const double *positions_ang,
+                                     size_t coordinate_count,
+                                     const double *cell_ang, size_t cell_len);
+
+/**
+ * @brief Set unconstrained NVE Cartesian velocities in angstrom/ps.
+ *
+ * coordinate_count must match 3 * atom_count of the live session geometry.
+ */
+int lammpc_session_nve_set_velocities(LammpcSession *session,
+                                      const double *velocities_ang_ps,
+                                      size_t coordinate_count);
+
+/**
+ * @brief Advance unconstrained NVE dynamics with LAMMPS's own integrator.
+ *
+ * Runs step_count velocity-Verlet steps (`fix nve`) at the given timestep
+ * in ps. No projection or position restoration is applied.
+ */
+int lammpc_session_nve_step(LammpcSession *session, size_t step_count,
+                            double time_step_ps);
+
+/**
+ * @brief Copy unconstrained NVE state in Cartesian metal units.
+ *
+ * positions_ang and velocities_ang_ps each have coordinate_count entries.
+ * Any output pointer may be NULL.
+ */
+int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
+                             double *velocities_ang_ps,
+                             size_t coordinate_count,
+                             LammpcNveObservation *observation);
 
 /**
  * @brief One step on a persistent session: `ForceInput` bytes in,

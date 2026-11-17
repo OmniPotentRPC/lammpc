@@ -85,3 +85,19 @@ Both mass-weighted and Cartesian planes are supported. Position is restored
 after each drift, force and velocity are projected every step, and Langevin
 noise is projected onto the plane. The interface is independent of PAFI,
 OH-TST, pair styles, and material types.
+
+## Unconstrained NVE session dynamics
+
+An additive `lammpc_session_nve_*` ABI provides an opt-in unconstrained path
+for trajectory shooting and reversible dynamics checks:
+
+- `lammpc_session_nve_set_positions`: scatter Cartesian positions on the live
+  geometry and optionally update the box.
+- `lammpc_session_nve_set_velocities`: scatter Cartesian velocities.
+- `lammpc_session_nve_step`: run exact velocity-Verlet steps with LAMMPS's own
+  `fix nve` integrator (`run N`, no projection/restoration).
+- `lammpc_session_nve_state`: gather Cartesian positions, velocities, and
+  potential/kinetic energy from thermo.
+
+This path does not modify the constrained BAOAB interface; both APIs coexist
+on the same session type.
