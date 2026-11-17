@@ -55,6 +55,8 @@ Session entry points, on a live embed instance:
 - =lammpc_session_set_hard_boundary()= stores the callback. NULL clears it.
 - =lammpc_session_clear_hard_boundary()= clears it.
 - =lammpc_session_integrate()= runs that many LAMMPS steps.
+- =lammpc_session_md_step()= applies the callback once after every completed
+  constrained-MD step.
 
 The instance must already exist (a force evaluation builds it) and must
 already have a time integrator and a timestep. A typical =extraSetup=
@@ -129,6 +131,12 @@ embed binding before it closes the LAMMPS instance. Disarm drops the
 callback even when the fix is still installed, so a later step does
 not call the host. A null instance is a no-op.
 
+=lammpc_session_md_step()= keeps its own constrained position and velocity
+state instead of installing the LAMMPS fix. When a callback is armed, each
+completed constrained-MD step passes that post-step state and the live LAMMPS
+box to the callback exactly once. Reject and an invalid decision restore the
+pre-step constrained state; reflect keeps the callback's writes.
+
 * Rust
 
 lammpc has no Rust API. There is no closure adapter. A Rust host calls
@@ -161,6 +169,9 @@ includes =src/lammpc_embed_api.cpp= so it can read the live handle, and
 the binary compiles those two companion sources with it. That test
 attaches the fix, checks that one step calls the host, disarms, and
 checks that the next step does not.
+=tests/test_embed_lj_e2e.c= also arms a reflecting callback before several
+=lammpc_session_md_step()= calls and checks the callback, reflection, step,
+and force-evaluation counts.
 
 * Smoke
 

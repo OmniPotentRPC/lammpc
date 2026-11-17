@@ -2,6 +2,8 @@
 #include "lammpc_params.h"
 #include "lammpc_boundary_embed.h"
 
+#include "domain.h"
+#include "lammps.h"
 #include "library.h"
 #include "minimage.h"
 
@@ -135,6 +137,14 @@ struct LammpcSession {
   std::vector<double> nve_velocities;
   LammpcNveObservation nve_observation = {};
 };
+
+struct HardBoundaryHook {
+  LammpcHardBoundaryFn fn = nullptr;
+  void *user = nullptr;
+};
+
+/* Present only while a host callback is armed. Absence is the unset path. */
+std::unordered_map<LammpcSession *, HardBoundaryHook> g_hard_boundary_hooks;
 
 struct LammpsBounds {
   double xlo = 0.0;
@@ -683,6 +693,36 @@ int nve_sync_state(LammpcSession *session) {
   return 0;
 }
 
+int md_apply_hard_boundary(LammpcSession *session,
+                           const std::vector<double> &previous_positions,
+                           const std::vector<double> &previous_velocities) {
+  const auto hook = g_hard_boundary_hooks.find(session);
+  if (hook == g_hard_boundary_hooks.end())
+    return 0;
+
+  auto *lmp = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp);
+  LammpcBoundaryBox box = {};
+  for (int dim = 0; dim < 3; ++dim) {
+    box.lo[dim] = lmp->domain->boxlo[dim];
+    box.hi[dim] = lmp->domain->boxhi[dim];
+    box.periodic[dim] = lmp->domain->periodicity[dim];
+  }
+  box.xy = lmp->domain->xy;
+  box.xz = lmp->domain->xz;
+  box.yz = lmp->domain->yz;
+  box.triclinic = lmp->domain->triclinic;
+
+  const int decision = lammpc_hard_boundary_apply(
+      hook->second.fn, hook->second.user, static_cast<int>(session->n_atoms),
+      session->md_positions.data(), session->md_velocities.data(),
+      previous_positions.data(), previous_velocities.data(), &box);
+  if (decision < 0) {
+    store_error("hard boundary callback failed");
+    return -1;
+  }
+  return 0;
+}
+
 int reject_common_overlay(CommonMethodSpec_ptr common) {
   if (common.p.type == CAPN_NULL)
     return 0;
@@ -755,14 +795,6 @@ LammpcSession *session_from_config_bytes(const void *config_capnp,
   capn_free(&arena);
   return session;
 }
-
-struct HardBoundaryHook {
-  LammpcHardBoundaryFn fn = nullptr;
-  void *user = nullptr;
-};
-
-/* Present only while a host callback is armed. Absence is the unset path. */
-std::unordered_map<LammpcSession *, HardBoundaryHook> g_hard_boundary_hooks;
 
 void forget_hard_boundary(LammpcSession *session) {
   if (!session)
@@ -981,6 +1013,8 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   const double decay =
       std::exp(-session->md_config.friction_per_ps * h);
   for (size_t step = 0; step < step_count; ++step) {
+    const std::vector<double> previous_positions = session->md_positions;
+    const std::vector<double> previous_velocities = session->md_velocities;
     for (size_t i = 0; i < session->md_velocities.size(); ++i)
       session->md_velocities[i] +=
           0.5 * h * session->md_forces[i] /
@@ -1007,6 +1041,9 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
           0.5 * h * session->md_forces[i] /
           (session->md_masses[i] * kMassVelocityToEv);
     md_project_velocity(session);
+    if (md_apply_hard_boundary(session, previous_positions,
+                               previous_velocities) != 0)
+      return -1;
     ++session->md_steps;
   }
   clear_error();
