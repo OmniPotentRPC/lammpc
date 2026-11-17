@@ -17,10 +17,13 @@ eOn's current LAMMPS call style. The design decisions that carry that bar:
 - One persistent LAMMPS instance per session
   (`lammpc_session_create_from_config`); the interaction model
   (units / pair style / coefficients / type map) is applied once from
-  `LammpsParams` by calling the actual LAMMPS functions on the instance --
-  pair creation and coefficient setup on the Pair object, box and atom setup
-  through the Domain/Atom objects. No command-string parsing anywhere, at
-  setup or in the loop.
+  `LammpsParams` by calling the actual LAMMPS functions on the instance.
+  Remaining setup text commands (region bounds, masses) use `%.17g` formatting.
+- First-call geometry creation is full-precision and batched: periodic
+  coordinates are wrapped through
+  [minimage](https://github.com/lode-org/minimage), then all atoms are created
+  in one `lammps_create_atoms` call. The build fails loudly if LAMMPS reports
+  any atom-count mismatch (`requested != created || requested != present`).
 - Per-step geometry writes straight into the instance's position arrays;
   forces read straight from the force arrays and energy from the pair
   accumulators after the direct pair compute call. No file traffic, no log
@@ -65,7 +68,8 @@ pixi run test-stub-sanitize # same under ASan/UBSan
 ```
 
 The embed build links liblammps (`-Dwith_lammps=true -Dlammps_root=...`) and
-calls its actual functions directly; there is no command-string layer.
+calls its actual functions directly on the force loop. It also links minimage
+for periodic wrap/face handling on first-call atom creation.
 
 ## Constrained molecular dynamics
 
