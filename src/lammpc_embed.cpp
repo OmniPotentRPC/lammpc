@@ -240,6 +240,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
 
     lmp->atom->create_avec(p.atom_style.c_str(), 0, nullptr, 1);
     lmp->atom->ntypes = (int)p.type_to_z.size();
+    lmp->atom->allocate_type_arrays();
 
     /* Box: fields plus the same call sequence CreateBox::command runs. */
     double lo[3] = {0, 0, 0};
