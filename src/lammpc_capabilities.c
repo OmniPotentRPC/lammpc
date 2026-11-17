@@ -77,7 +77,8 @@ int lammpc_capabilities_result(void *capabilities_capnp,
   view.protocolFamily = (capn_text){sizeof("rgpot.potentials") - 1, "rgpot.potentials", NULL};
   view.protocolMajor = 1;
   view.protocolMinor = 0;
-  view.schemaId = (capn_text){16, "bd1f89fa17369103", NULL};
+  view.schemaId =
+      (capn_text){sizeof("0xbd1f89fa17369103") - 1, "0xbd1f89fa17369103", NULL};
   view.bridgeAbiMajor = 1;
   view.bridgeAbiMinor = 0;
   view.bridgeLayout = 1;

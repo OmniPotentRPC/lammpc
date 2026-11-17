@@ -49,7 +49,7 @@ static void test_capabilities_round_trip(void **state) {
   assert_true(text_equals(view.protocolFamily, "rgpot.potentials"));
   assert_int_equal(view.protocolMajor, 1);
   assert_int_equal(view.protocolMinor, 0);
-  assert_true(text_equals(view.schemaId, "bd1f89fa17369103"));
+  assert_true(text_equals(view.schemaId, "0xbd1f89fa17369103"));
   assert_int_equal(view.bridgeAbiMajor, 1);
   assert_int_equal(view.bridgeAbiMinor, 0);
   assert_int_equal(view.bridgeLayout, 1);
