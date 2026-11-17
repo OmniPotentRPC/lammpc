@@ -18,6 +18,13 @@ static const char *const required_abi_features[] = {
     "abi.lammpc_session_create_from_config",
     "abi.lammpc_session_configure",
     "abi.lammpc_session_destroy",
+    "abi.lammpc_session_md_initialize",
+    "abi.lammpc_session_md_step",
+    "abi.lammpc_session_md_state",
+    "abi.lammpc_session_nve_set_positions",
+    "abi.lammpc_session_nve_set_velocities",
+    "abi.lammpc_session_nve_step",
+    "abi.lammpc_session_nve_state",
     "abi.lammpc_session_calculate_result",
     "abi.lammpc_calculate_result",
     "abi.lammpc_calculate_result_from_config",
@@ -48,6 +55,17 @@ static void test_stub_reports_unavailable(void **state) {
   assert_null(lammpc_session_create_from_config(NULL, 0));
   assert_int_not_equal(lammpc_session_set_params(NULL, NULL, 0), 0);
   assert_int_not_equal(lammpc_session_configure(NULL, NULL, 0), 0);
+  assert_int_not_equal(lammpc_session_md_initialize(NULL, NULL, 0, NULL, NULL, 0,
+                                                    NULL),
+                       0);
+  assert_int_not_equal(lammpc_session_md_step(NULL, 0), 0);
+  assert_int_not_equal(
+      lammpc_session_md_state(NULL, NULL, NULL, NULL, NULL, 0, NULL), 0);
+  assert_int_not_equal(
+      lammpc_session_nve_set_positions(NULL, NULL, 0, NULL, 0), 0);
+  assert_int_not_equal(lammpc_session_nve_set_velocities(NULL, NULL, 0), 0);
+  assert_int_not_equal(lammpc_session_nve_step(NULL, 0, 0.001), 0);
+  assert_int_not_equal(lammpc_session_nve_state(NULL, NULL, NULL, 0, NULL), 0);
   lammpc_session_destroy(NULL);
   LammpcResult energy_result = lammpc_energy(0, NULL, NULL, NULL, 0);
   assert_int_equal(energy_result.ok, 0);

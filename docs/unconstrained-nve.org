@@ -1,0 +1,49 @@
+#+title: Unconstrained NVE Session ABI
+#+author: lammpc
+
+* Overview
+
+The unconstrained NVE ABI is an additive, opt-in session surface for
+trajectory shooting workflows that need direct control over phase-space
+initial conditions. It intentionally leaves =lammpc_session_md_*= behavior
+unchanged.
+
+The API is:
+
+- =lammpc_session_nve_set_positions=
+- =lammpc_session_nve_set_velocities=
+- =lammpc_session_nve_step=
+- =lammpc_session_nve_state=
+
+* Contract
+
+1. Build a session exactly as before (=lammpc_session_create*=, configure, and
+   first geometry setup through an existing force call path).
+2. Set Cartesian positions in angstrom; optionally set a restricted-triclinic
+   box in row-major 3x3 form.
+3. Set Cartesian velocities in angstrom/ps.
+4. Propagate with =lammpc_session_nve_step(..., step_count, time_step_ps)=.
+   lammpc installs =fix nve= and runs LAMMPS velocity-Verlet without any
+   projection/restoration layers.
+5. Read positions, velocities, and PE/KE with =lammpc_session_nve_state=.
+
+All functions return 0 on success and a non-zero value on failure, with details
+in =lammpc_last_error()=.
+
+* Units and geometry
+
+- Positions: angstrom
+- Velocities: angstrom/ps
+- Timestep: ps
+- Energies in =LammpcNveObservation=: eV
+
+=lammpc_session_nve_set_positions= accepts an optional box. If a box is
+provided, it must carry exactly 9 entries and satisfy restricted-triclinic
+constraints compatible with LAMMPS box updates.
+
+* Non-goals
+
+- No hidden velocity randomization.
+- No constrained-plane projection.
+- No position restoration to any manifold.
+- No behavior change to the constrained BAOAB API.

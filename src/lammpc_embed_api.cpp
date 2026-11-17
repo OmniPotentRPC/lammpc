@@ -128,6 +128,10 @@ struct LammpcSession {
   size_t md_force_evaluations = 0;
   size_t md_steps = 0;
   uint64_t md_rng[4] = {0, 0, 0, 0};
+  bool nve_fix_installed = false;
+  std::vector<double> nve_positions;
+  std::vector<double> nve_velocities;
+  LammpcNveObservation nve_observation = {};
 };
 
 struct LammpsBounds {
@@ -193,6 +197,9 @@ void destroy_instance(LammpcSession *session) {
   lammps_close(session->lmp);
   session->lmp = nullptr;
   session->md_ready = false;
+  session->nve_fix_installed = false;
+  session->nve_positions.clear();
+  session->nve_velocities.clear();
 }
 
 int build_instance(LammpcSession *session, size_t n_atoms,
@@ -435,7 +442,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       return -1;
     }
   }
-  if (run_cmd(lmp, "thermo_style custom step pe pxx pyy pzz pxy pxz pyz") != 0 ||
+  if (run_cmd(lmp, "thermo_style custom step pe ke pxx pyy pzz pxy pxz pyz") != 0 ||
       run_cmd(lmp, "run 0") != 0) {
     lammps_close(lmp);
     return -1;
@@ -630,6 +637,47 @@ int md_evaluate(LammpcSession *session) {
         forces_h_bohr[i] * kEvPerHartree / kAngstromPerBohr;
   ++session->md_force_evaluations;
   md_project_force(session);
+  return 0;
+}
+
+int nve_coordinate_count(const LammpcSession *session, size_t *coordinate_count) {
+  if (!session || !session->lmp || session->n_atoms == 0 ||
+      session->atom_types.size() != session->n_atoms) {
+    store_error("NVE state requires a live session geometry");
+    return -1;
+  }
+  *coordinate_count = session->n_atoms * 3u;
+  return 0;
+}
+
+int nve_sync_state(LammpcSession *session) {
+  size_t coordinate_count = 0;
+  if (nve_coordinate_count(session, &coordinate_count) != 0)
+    return -1;
+  session->nve_positions.resize(coordinate_count, 0.0);
+  session->nve_velocities.resize(coordinate_count, 0.0);
+  lammps_gather_atoms(session->lmp, "x", 1, 3, session->nve_positions.data());
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) > 0)
+      store_error(buffer);
+    else
+      store_error("lammps_gather_atoms(x) failed");
+    return -1;
+  }
+  lammps_gather_atoms(session->lmp, "v", 1, 3, session->nve_velocities.data());
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) > 0)
+      store_error(buffer);
+    else
+      store_error("lammps_gather_atoms(v) failed");
+    return -1;
+  }
+  session->nve_observation.potential_energy_ev =
+      lammps_get_thermo(session->lmp, "pe");
+  session->nve_observation.kinetic_energy_ev =
+      lammps_get_thermo(session->lmp, "ke");
   return 0;
 }
 
@@ -974,6 +1022,158 @@ int lammpc_session_md_state(
     observation->force_evaluations = session->md_force_evaluations;
     observation->steps = session->md_steps;
   }
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_nve_set_positions(LammpcSession *session,
+                                     const double *positions_ang,
+                                     size_t coordinate_count,
+                                     const double *cell_ang, size_t cell_len) {
+  if (!session || !positions_ang) {
+    store_error("nve_set_positions received a null argument");
+    return -1;
+  }
+  size_t expected_coordinates = 0;
+  if (nve_coordinate_count(session, &expected_coordinates) != 0)
+    return -1;
+  if (coordinate_count != expected_coordinates) {
+    store_error("nve_set_positions coordinate count mismatch");
+    return -1;
+  }
+  if ((cell_ang && cell_len != 9u) || (!cell_ang && cell_len != 0u)) {
+    store_error("nve_set_positions box must have exactly 9 entries");
+    return -1;
+  }
+  if (cell_ang) {
+    if (std::fabs(cell_ang[1]) > 1e-12 || std::fabs(cell_ang[2]) > 1e-12 ||
+        std::fabs(cell_ang[5]) > 1e-12) {
+      store_error("nve_set_positions supports restricted triclinic boxes only");
+      return -1;
+    }
+    if (!(cell_ang[0] > 0.0 && cell_ang[4] > 0.0 && cell_ang[8] > 0.0)) {
+      store_error("nve_set_positions box diagonal entries must be positive");
+      return -1;
+    }
+    const std::string cmd =
+        "change_box all x final 0 " + format_double17(cell_ang[0]) +
+        " y final 0 " + format_double17(cell_ang[4]) + " z final 0 " +
+        format_double17(cell_ang[8]) + " xy final " + format_double17(cell_ang[3]) +
+        " xz final " + format_double17(cell_ang[6]) + " yz final " +
+        format_double17(cell_ang[7]) + " remap units box";
+    if (run_cmd(session->lmp, cmd) != 0)
+      return -1;
+    session->has_cell = 1;
+    std::memcpy(session->cell_ang, cell_ang, sizeof(session->cell_ang));
+  }
+  lammps_scatter_atoms(session->lmp, "x", 1, 3, (void *)positions_ang);
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) > 0)
+      store_error(buffer);
+    else
+      store_error("lammps_scatter_atoms(x) failed");
+    return -1;
+  }
+  if (run_cmd(session->lmp, "run 0 pre yes post no") != 0)
+    return -1;
+  if (nve_sync_state(session) != 0)
+    return -1;
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_nve_set_velocities(LammpcSession *session,
+                                      const double *velocities_ang_ps,
+                                      size_t coordinate_count) {
+  if (!session || !velocities_ang_ps) {
+    store_error("nve_set_velocities received a null argument");
+    return -1;
+  }
+  size_t expected_coordinates = 0;
+  if (nve_coordinate_count(session, &expected_coordinates) != 0)
+    return -1;
+  if (coordinate_count != expected_coordinates) {
+    store_error("nve_set_velocities coordinate count mismatch");
+    return -1;
+  }
+  lammps_scatter_atoms(session->lmp, "v", 1, 3, (void *)velocities_ang_ps);
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) > 0)
+      store_error(buffer);
+    else
+      store_error("lammps_scatter_atoms(v) failed");
+    return -1;
+  }
+  if (run_cmd(session->lmp, "run 0 pre yes post no") != 0)
+    return -1;
+  if (nve_sync_state(session) != 0)
+    return -1;
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_nve_step(LammpcSession *session, size_t step_count,
+                            double time_step_ps) {
+  if (!session) {
+    store_error("nve_step received a null session");
+    return -1;
+  }
+  if (!(std::isfinite(time_step_ps) && time_step_ps > 0.0)) {
+    store_error("nve_step needs a finite positive timestep");
+    return -1;
+  }
+  size_t expected_coordinates = 0;
+  if (nve_coordinate_count(session, &expected_coordinates) != 0)
+    return -1;
+  (void)expected_coordinates;
+  if (!session->nve_fix_installed) {
+    if (run_cmd(session->lmp, "fix __lammpc_nve all nve") != 0)
+      return -1;
+    session->nve_fix_installed = true;
+  }
+  if (run_cmd(session->lmp, "timestep " + format_double17(time_step_ps)) != 0)
+    return -1;
+  if (step_count > 0 &&
+      run_cmd(session->lmp, "run " + std::to_string(step_count) +
+                                 " pre yes post no") != 0)
+    return -1;
+  if (step_count == 0 && run_cmd(session->lmp, "run 0 pre yes post no") != 0)
+    return -1;
+  if (nve_sync_state(session) != 0)
+    return -1;
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
+                             double *velocities_ang_ps,
+                             size_t coordinate_count,
+                             LammpcNveObservation *observation) {
+  if (!session) {
+    store_error("nve_state received a null session");
+    return -1;
+  }
+  size_t expected_coordinates = 0;
+  if (nve_coordinate_count(session, &expected_coordinates) != 0)
+    return -1;
+  if (coordinate_count != expected_coordinates) {
+    store_error("nve_state coordinate count mismatch");
+    return -1;
+  }
+  if (nve_sync_state(session) != 0)
+    return -1;
+  if (positions_ang) {
+    std::copy(session->nve_positions.begin(), session->nve_positions.end(),
+              positions_ang);
+  }
+  if (velocities_ang_ps) {
+    std::copy(session->nve_velocities.begin(), session->nve_velocities.end(),
+              velocities_ang_ps);
+  }
+  if (observation)
+    *observation = session->nve_observation;
   clear_error();
   return 0;
 }
