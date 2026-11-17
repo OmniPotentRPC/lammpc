@@ -33,6 +33,38 @@ typedef struct LammpcResult {
 /** @brief Opaque persistent evaluation session (one LAMMPS instance). */
 typedef struct LammpcSession LammpcSession;
 
+/** @brief Coordinate convention used by a constrained MD plane. */
+typedef enum LammpcPlaneCoordinates {
+  /** @brief q_i = sqrt(m_i) x_i; the supplied normal is Euclidean in q. */
+  LAMMPC_PLANE_MASS_WEIGHTED = 0,
+  /** @brief Cartesian point and normal with the mass metric applied by MD. */
+  LAMMPC_PLANE_CARTESIAN = 1
+} LammpcPlaneCoordinates;
+
+/**
+ * @brief Controls for lammpc's generic projected BAOAB stepper.
+ *
+ * Metal units are used: time_step_ps in ps, thermal_energy_ev in eV, and
+ * friction_per_ps in ps^-1. A zero seed is valid and deterministic.
+ */
+typedef struct LammpcMdConfig {
+  double time_step_ps;
+  double thermal_energy_ev;
+  double friction_per_ps;
+  unsigned long long seed;
+  LammpcPlaneCoordinates coordinates;
+} LammpcMdConfig;
+
+/** @brief Scalar accounting for the current constrained MD state. */
+typedef struct LammpcMdObservation {
+  /** Force along the positive unit normal in the selected coordinates. */
+  double constraint_force;
+  /** Number of force evaluations since md_initialize. */
+  size_t force_evaluations;
+  /** Number of completed BAOAB steps. */
+  size_t steps;
+} LammpcMdObservation;
+
 /**
  * @brief Apply sticky interaction-model options from a flat `LammpsParams`
  * message (units/pair_style/pair_coeff/type map).
@@ -82,6 +114,38 @@ int lammpc_session_configure(LammpcSession *session, const void *config_capnp,
                              size_t config_capnp_size_bytes);
 
 void lammpc_session_destroy(LammpcSession *session);
+
+/**
+ * @brief Initialize constrained Langevin dynamics on a configured session.
+ *
+ * force_input supplies the atoms, positions, optional cell, and requested
+ * eV/angstrom units. point and normal contain one value per Cartesian
+ * coordinate. The initial position is restored to the plane, velocities are
+ * drawn from the configured Maxwell distribution, and both velocity and
+ * force are projected before returning.
+ */
+int lammpc_session_md_initialize(
+    LammpcSession *session, const void *force_input_capnp,
+    size_t force_input_capnp_size_bytes, const double *point,
+    const double *normal, size_t coordinate_count,
+    const LammpcMdConfig *config);
+
+/** @brief Advance exactly step_count projected BAOAB steps. */
+int lammpc_session_md_step(LammpcSession *session, size_t step_count);
+
+/**
+ * @brief Copy the current constrained MD state in Cartesian metal units.
+ *
+ * Every array has coordinate_count entries. Any output array may be NULL.
+ * projected_forces_ev_ang contains the force used by the integrator.
+ * removed_velocities_ang_ps contains the normal velocity removed by the most
+ * recent projection.
+ */
+int lammpc_session_md_state(
+    LammpcSession *session, double *positions_ang,
+    double *velocities_ang_ps, double *projected_forces_ev_ang,
+    double *removed_velocities_ang_ps, size_t coordinate_count,
+    LammpcMdObservation *observation);
 
 /**
  * @brief One step on a persistent session: `ForceInput` bytes in,

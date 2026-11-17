@@ -106,6 +106,42 @@ int lammpc_session_configure(LammpcSession *session, const void *config_capnp,
 
 void lammpc_session_destroy(LammpcSession *session) { (void)session; }
 
+int lammpc_session_md_initialize(
+    LammpcSession *session, const void *force_input_capnp,
+    size_t force_input_capnp_size_bytes, const double *point,
+    const double *normal, size_t coordinate_count,
+    const LammpcMdConfig *config) {
+  (void)session;
+  (void)force_input_capnp;
+  (void)force_input_capnp_size_bytes;
+  (void)point;
+  (void)normal;
+  (void)coordinate_count;
+  (void)config;
+  return -1;
+}
+
+int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
+  (void)session;
+  (void)step_count;
+  return -1;
+}
+
+int lammpc_session_md_state(
+    LammpcSession *session, double *positions_ang,
+    double *velocities_ang_ps, double *projected_forces_ev_ang,
+    double *removed_velocities_ang_ps, size_t coordinate_count,
+    LammpcMdObservation *observation) {
+  (void)session;
+  (void)positions_ang;
+  (void)velocities_ang_ps;
+  (void)projected_forces_ev_ang;
+  (void)removed_velocities_ang_ps;
+  (void)coordinate_count;
+  (void)observation;
+  return -1;
+}
+
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,
     size_t force_input_capnp_size_bytes, void *potential_result_capnp,

@@ -3,7 +3,9 @@
 
 #include "library.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -100,6 +102,8 @@ int decode_lammps_params(LammpsParams_ptr params, DecodedParams *out) {
 constexpr double kEvPerHartree = 27.211386245988;
 constexpr double kAngstromPerBohr = 0.529177210903;
 constexpr double kBarPerEvA3 = 1602176.6208;
+/* LAMMPS metal-unit conversion: mvv2e * amu * (angstrom/ps)^2 = eV. */
+constexpr double kMassVelocityToEv = 1.0364269656262175e-4;
 
 struct LammpcSession {
   void *lmp = nullptr;
@@ -108,6 +112,19 @@ struct LammpcSession {
   int has_cell = 0;
   double cell_ang[9] = {0};
   std::vector<int> atom_types;
+  bool md_ready = false;
+  LammpcMdConfig md_config = {};
+  std::vector<double> md_point;
+  std::vector<double> md_normal;
+  std::vector<double> md_masses;
+  std::vector<double> md_positions;
+  std::vector<double> md_velocities;
+  std::vector<double> md_forces;
+  std::vector<double> md_removed_velocities;
+  double md_constraint_force = 0.0;
+  size_t md_force_evaluations = 0;
+  size_t md_steps = 0;
+  uint64_t md_rng[4] = {0, 0, 0, 0};
 };
 
 int type_for_atomic_number(const DecodedParams &params, int z) {
@@ -135,6 +152,7 @@ void destroy_instance(LammpcSession *session) {
     return;
   lammps_close(session->lmp);
   session->lmp = nullptr;
+  session->md_ready = false;
 }
 
 int build_instance(LammpcSession *session, size_t n_atoms,
@@ -323,6 +341,142 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
   return 0;
 }
 
+uint64_t splitmix64(uint64_t *state) {
+  *state += UINT64_C(0x9e3779b97f4a7c15);
+  uint64_t z = *state;
+  z = (z ^ (z >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+  z = (z ^ (z >> 27)) * UINT64_C(0x94d049bb133111eb);
+  return z ^ (z >> 31);
+}
+
+uint64_t md_random_u64(LammpcSession *session) {
+  uint64_t *s = session->md_rng;
+  const uint64_t result =
+      ((s[0] + s[3]) << 23 | (s[0] + s[3]) >> (64 - 23)) + s[0];
+  const uint64_t t = s[1] << 17;
+  s[2] ^= s[0];
+  s[3] ^= s[1];
+  s[1] ^= s[2];
+  s[0] ^= s[3];
+  s[2] ^= t;
+  s[3] = (s[3] << 45) | (s[3] >> (64 - 45));
+  return result;
+}
+
+double md_uniform(LammpcSession *session) {
+  return (double)(md_random_u64(session) >> 11) *
+         (1.0 / 9007199254740992.0);
+}
+
+double md_normal(LammpcSession *session) {
+  const double u1 = std::max(md_uniform(session), 1.0e-16);
+  const double u2 = md_uniform(session);
+  return std::sqrt(-2.0 * std::log(u1)) *
+         std::cos(6.283185307179586476925286766559 * u2);
+}
+
+double md_plane_denominator(const LammpcSession *session) {
+  double denominator = 0.0;
+  for (size_t i = 0; i < session->md_normal.size(); ++i) {
+    const double normal = session->md_normal[i];
+    denominator += normal * normal / session->md_masses[i];
+  }
+  return denominator;
+}
+
+void md_restore_position(LammpcSession *session) {
+  double distance = 0.0;
+  if (session->md_config.coordinates == LAMMPC_PLANE_MASS_WEIGHTED) {
+    for (size_t i = 0; i < session->md_positions.size(); ++i)
+      distance += session->md_normal[i] *
+                  (std::sqrt(session->md_masses[i]) *
+                       session->md_positions[i] -
+                   session->md_point[i]);
+    for (size_t i = 0; i < session->md_positions.size(); ++i)
+      session->md_positions[i] -=
+          session->md_normal[i] * distance /
+          std::sqrt(session->md_masses[i]);
+    return;
+  }
+  for (size_t i = 0; i < session->md_positions.size(); ++i)
+    distance += session->md_normal[i] *
+                (session->md_positions[i] - session->md_point[i]);
+  const double coefficient = distance / md_plane_denominator(session);
+  for (size_t i = 0; i < session->md_positions.size(); ++i)
+    session->md_positions[i] -=
+        session->md_normal[i] * coefficient / session->md_masses[i];
+}
+
+void md_project_velocity(LammpcSession *session) {
+  std::fill(session->md_removed_velocities.begin(),
+            session->md_removed_velocities.end(), 0.0);
+  double component = 0.0;
+  if (session->md_config.coordinates == LAMMPC_PLANE_MASS_WEIGHTED) {
+    for (size_t i = 0; i < session->md_velocities.size(); ++i)
+      component += session->md_normal[i] *
+                   std::sqrt(session->md_masses[i]) *
+                   session->md_velocities[i];
+    for (size_t i = 0; i < session->md_velocities.size(); ++i) {
+      const double removed =
+          session->md_normal[i] * component /
+          std::sqrt(session->md_masses[i]);
+      session->md_velocities[i] -= removed;
+      session->md_removed_velocities[i] = removed;
+    }
+    return;
+  }
+  for (size_t i = 0; i < session->md_velocities.size(); ++i)
+    component += session->md_normal[i] * session->md_velocities[i];
+  const double coefficient = component / md_plane_denominator(session);
+  for (size_t i = 0; i < session->md_velocities.size(); ++i) {
+    const double removed = session->md_normal[i] * coefficient /
+                           session->md_masses[i];
+    session->md_velocities[i] -= removed;
+    session->md_removed_velocities[i] = removed;
+  }
+}
+
+void md_project_force(LammpcSession *session) {
+  if (session->md_config.coordinates == LAMMPC_PLANE_MASS_WEIGHTED) {
+    double component = 0.0;
+    for (size_t i = 0; i < session->md_forces.size(); ++i)
+      component += session->md_normal[i] * session->md_forces[i] /
+                   std::sqrt(session->md_masses[i]);
+    session->md_constraint_force = component;
+    for (size_t i = 0; i < session->md_forces.size(); ++i)
+      session->md_forces[i] -=
+          std::sqrt(session->md_masses[i]) * session->md_normal[i] *
+          component;
+    return;
+  }
+  double normal_force = 0.0;
+  double acceleration = 0.0;
+  for (size_t i = 0; i < session->md_forces.size(); ++i) {
+    normal_force += session->md_normal[i] * session->md_forces[i];
+    acceleration += session->md_normal[i] * session->md_forces[i] /
+                    session->md_masses[i];
+  }
+  session->md_constraint_force = normal_force;
+  const double coefficient = acceleration / md_plane_denominator(session);
+  for (size_t i = 0; i < session->md_forces.size(); ++i)
+    session->md_forces[i] -= session->md_normal[i] * coefficient;
+}
+
+int md_evaluate(LammpcSession *session) {
+  std::vector<double> forces_h_bohr(session->md_positions.size(), 0.0);
+  double energy_h = 0.0;
+  double stress_h_bohr3[9] = {0};
+  if (evaluate(session, session->n_atoms, session->md_positions.data(),
+               &energy_h, forces_h_bohr.data(), stress_h_bohr3) != 0)
+    return -1;
+  for (size_t i = 0; i < forces_h_bohr.size(); ++i)
+    session->md_forces[i] =
+        forces_h_bohr[i] * kEvPerHartree / kAngstromPerBohr;
+  ++session->md_force_evaluations;
+  md_project_force(session);
+  return 0;
+}
+
 int reject_common_overlay(CommonMethodSpec_ptr common) {
   if (common.p.type == CAPN_NULL)
     return 0;
@@ -475,6 +629,197 @@ void lammpc_session_destroy(LammpcSession *session) {
     return;
   destroy_instance(session);
   delete session;
+}
+
+int lammpc_session_md_initialize(
+    LammpcSession *session, const void *force_input_capnp,
+    size_t force_input_capnp_size_bytes, const double *point,
+    const double *normal, size_t coordinate_count,
+    const LammpcMdConfig *config) {
+  if (!session || !point || !normal || !config) {
+    store_error("md_initialize received a null argument");
+    return -1;
+  }
+  if (!(std::isfinite(config->time_step_ps) && config->time_step_ps > 0.0 &&
+        std::isfinite(config->thermal_energy_ev) &&
+        config->thermal_energy_ev > 0.0 &&
+        std::isfinite(config->friction_per_ps) &&
+        config->friction_per_ps > 0.0)) {
+    store_error("constrained MD controls must be finite and positive");
+    return -1;
+  }
+  if (config->coordinates != LAMMPC_PLANE_MASS_WEIGHTED &&
+      config->coordinates != LAMMPC_PLANE_CARTESIAN) {
+    store_error("unknown constrained MD coordinate convention");
+    return -1;
+  }
+
+  struct capn arena;
+  ForceInput_ptr force_input;
+  if (lammpc_force_input_root(force_input_capnp,
+                              force_input_capnp_size_bytes, &arena,
+                              &force_input) != 0) {
+    store_error("invalid ForceInput message");
+    return -1;
+  }
+  size_t n_atoms = 0;
+  int has_cell = 0;
+  if (lammpc_force_input_atom_count(force_input, &n_atoms, &has_cell) != 0 ||
+      coordinate_count != n_atoms * 3u) {
+    lammpc_params_release(&arena);
+    store_error("plane coordinate count differs from ForceInput geometry");
+    return -1;
+  }
+  std::vector<double> positions(coordinate_count, 0.0);
+  std::vector<int> atomic_numbers(n_atoms, 0);
+  double cell_ang[9] = {0};
+  if (lammpc_force_input_copy_geometry(
+          force_input, positions.data(), atomic_numbers.data(), n_atoms,
+          cell_ang, &has_cell) != 0) {
+    lammpc_params_release(&arena);
+    store_error("invalid ForceInput geometry");
+    return -1;
+  }
+  lammpc_params_release(&arena);
+
+  if (!geometry_matches(session, n_atoms, cell_ang, has_cell) &&
+      build_instance(session, n_atoms, positions.data(), atomic_numbers.data(),
+                     cell_ang, has_cell) != 0)
+    return -1;
+
+  session->md_config = *config;
+  session->md_point.assign(point, point + coordinate_count);
+  session->md_normal.assign(normal, normal + coordinate_count);
+  session->md_positions = positions;
+  session->md_velocities.assign(coordinate_count, 0.0);
+  session->md_forces.assign(coordinate_count, 0.0);
+  session->md_removed_velocities.assign(coordinate_count, 0.0);
+  session->md_masses.assign(coordinate_count, 0.0);
+  double normal_norm2 = 0.0;
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    if (!std::isfinite(point[i]) || !std::isfinite(normal[i])) {
+      store_error("plane point and normal must be finite");
+      return -1;
+    }
+    normal_norm2 += normal[i] * normal[i];
+    const size_t atom = i / 3u;
+    const int type = session->atom_types[atom];
+    const double mass =
+        (type > 0 && (size_t)type <= session->params.masses.size())
+            ? session->params.masses[(size_t)type - 1u]
+            : 1.0;
+    if (!(std::isfinite(mass) && mass > 0.0)) {
+      store_error("constrained MD needs finite positive masses");
+      return -1;
+    }
+    session->md_masses[i] = mass;
+  }
+  if (!(normal_norm2 > 0.0)) {
+    store_error("plane normal vanishes");
+    return -1;
+  }
+  const double inverse_normal_norm = 1.0 / std::sqrt(normal_norm2);
+  for (double &value : session->md_normal)
+    value *= inverse_normal_norm;
+  if (config->coordinates == LAMMPC_PLANE_CARTESIAN &&
+      !(md_plane_denominator(session) > 0.0)) {
+    store_error("Cartesian plane has a zero mass-metric denominator");
+    return -1;
+  }
+
+  uint64_t seed = (uint64_t)config->seed;
+  for (uint64_t &slot : session->md_rng)
+    slot = splitmix64(&seed);
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    const double sigma =
+        std::sqrt(config->thermal_energy_ev /
+                  (session->md_masses[i] * kMassVelocityToEv));
+    session->md_velocities[i] = sigma * md_normal(session);
+  }
+  md_restore_position(session);
+  md_project_velocity(session);
+  session->md_force_evaluations = 0;
+  session->md_steps = 0;
+  session->md_ready = true;
+  if (md_evaluate(session) != 0) {
+    session->md_ready = false;
+    return -1;
+  }
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
+  if (!session || !session->md_ready) {
+    store_error("constrained MD is not initialized");
+    return -1;
+  }
+  const double h = session->md_config.time_step_ps;
+  const double decay =
+      std::exp(-session->md_config.friction_per_ps * h);
+  for (size_t step = 0; step < step_count; ++step) {
+    for (size_t i = 0; i < session->md_velocities.size(); ++i)
+      session->md_velocities[i] +=
+          0.5 * h * session->md_forces[i] /
+          (session->md_masses[i] * kMassVelocityToEv);
+    for (size_t i = 0; i < session->md_positions.size(); ++i)
+      session->md_positions[i] += 0.5 * h * session->md_velocities[i];
+    md_restore_position(session);
+    for (size_t i = 0; i < session->md_velocities.size(); ++i) {
+      const double kick =
+          std::sqrt(session->md_config.thermal_energy_ev *
+                    (1.0 - decay * decay) /
+                    (session->md_masses[i] * kMassVelocityToEv));
+      session->md_velocities[i] =
+          decay * session->md_velocities[i] + kick * md_normal(session);
+    }
+    md_project_velocity(session);
+    for (size_t i = 0; i < session->md_positions.size(); ++i)
+      session->md_positions[i] += 0.5 * h * session->md_velocities[i];
+    md_restore_position(session);
+    if (md_evaluate(session) != 0)
+      return -1;
+    for (size_t i = 0; i < session->md_velocities.size(); ++i)
+      session->md_velocities[i] +=
+          0.5 * h * session->md_forces[i] /
+          (session->md_masses[i] * kMassVelocityToEv);
+    md_project_velocity(session);
+    ++session->md_steps;
+  }
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_md_state(
+    LammpcSession *session, double *positions_ang,
+    double *velocities_ang_ps, double *projected_forces_ev_ang,
+    double *removed_velocities_ang_ps, size_t coordinate_count,
+    LammpcMdObservation *observation) {
+  if (!session || !session->md_ready ||
+      coordinate_count != session->md_positions.size()) {
+    store_error("constrained MD state request has the wrong size");
+    return -1;
+  }
+  if (positions_ang)
+    std::copy(session->md_positions.begin(), session->md_positions.end(),
+              positions_ang);
+  if (velocities_ang_ps)
+    std::copy(session->md_velocities.begin(), session->md_velocities.end(),
+              velocities_ang_ps);
+  if (projected_forces_ev_ang)
+    std::copy(session->md_forces.begin(), session->md_forces.end(),
+              projected_forces_ev_ang);
+  if (removed_velocities_ang_ps)
+    std::copy(session->md_removed_velocities.begin(),
+              session->md_removed_velocities.end(),
+              removed_velocities_ang_ps);
+  if (observation) {
+    observation->constraint_force = session->md_constraint_force;
+    observation->force_evaluations = session->md_force_evaluations;
+    observation->steps = session->md_steps;
+  }
+  clear_error();
+  return 0;
 }
 
 LammpcResult lammpc_session_calculate_result(

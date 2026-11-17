@@ -196,6 +196,51 @@ static void test_lj_dimer_one_shot_config(void **state) {
   assert_true(fabs(energy - lj_energy(3.0)) < 1e-9);
 }
 
+static void test_projected_md_stays_on_plane(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 10.0,
+      .seed = 17,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 200), 0);
+
+  double positions[6];
+  double forces[6];
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_state(session, positions, NULL, forces,
+                                           NULL, 6, &observation),
+                   0);
+  double distance = 0.0;
+  double projected_force = 0.0;
+  for (int i = 0; i < 6; ++i) {
+    distance += normal[i] * (positions[i] - point[i]);
+    projected_force += normal[i] * forces[i];
+  }
+  assert_true(fabs(distance) < 1e-12);
+  assert_true(fabs(projected_force) < 1e-12);
+  assert_int_equal(observation.steps, 200);
+  assert_int_equal(observation.force_evaluations, 201);
+  lammpc_session_destroy(session);
+}
+
 static void test_overlay_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -238,6 +283,7 @@ int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
       cmocka_unit_test(test_lj_dimer_one_shot_config),
+      cmocka_unit_test(test_projected_md_stays_on_plane),
       cmocka_unit_test(test_overlay_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

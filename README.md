@@ -66,3 +66,18 @@ pixi run test-stub-sanitize # same under ASan/UBSan
 
 The embed build links liblammps (`-Dwith_lammps=true -Dlammps_root=...`) and
 calls its actual functions directly; there is no command-string layer.
+
+## Constrained molecular dynamics
+
+The additive `lammpc_session_md_*` API runs projected BAOAB dynamics on a
+configured session. `lammpc_session_md_initialize` receives one `ForceInput`,
+a hyperplane, and metal-unit time step, thermal energy, friction, and seed.
+`lammpc_session_md_step` advances an exact number of steps.
+`lammpc_session_md_state` returns Cartesian positions, projected forces,
+removed velocities, the scalar constraint force, and step and force-call
+counts.
+
+Both mass-weighted and Cartesian planes are supported. Position is restored
+after each drift, force and velocity are projected every step, and Langevin
+noise is projected onto the plane. The interface is independent of PAFI,
+OH-TST, pair styles, and material types.
