@@ -196,6 +196,25 @@ size_t lammpc_potential_result_size_for_force_input(
   return 0;
 }
 
+int lammpc_session_set_hard_boundary(LammpcSession *session,
+                                     LammpcHardBoundaryFn fn, void *user) {
+  (void)session;
+  (void)fn;
+  (void)user;
+  return -1;
+}
+
+int lammpc_session_clear_hard_boundary(LammpcSession *session) {
+  (void)session;
+  return -1;
+}
+
+int lammpc_session_integrate(LammpcSession *session, int nsteps) {
+  (void)session;
+  (void)nsteps;
+  return -1;
+}
+
 const char *lammpc_version(void) { return "lammpc-stub/" LAMMPC_VERSION_STRING; }
 
 int lammpc_abi_version(void) { return LAMMPC_ABI_VERSION; }

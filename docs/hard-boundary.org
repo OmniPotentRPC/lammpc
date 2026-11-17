@@ -1,0 +1,157 @@
+#+TITLE: Hard boundary ABI
+#+AUTHOR: Rohit Goswami
+
+* Purpose
+
+A LAMMPS-driven sampler can ask lammpc to apply a host-supplied region
+constraint after every integration step. lammpc does not implement the
+region and does not link rgsaddle. The host owns the geometry. lammpc
+only transports the post-step positions, velocities, and box, then
+applies the host decision.
+
+The callback is off unless the host arms it. An unset callback adds no
+fix and takes no coordinate snapshot.
+
+* Decisions
+
+The C callback returns one of three codes:
+
+- =LAMMPC_BOUNDARY_ACCEPT= (0). The step stands. Writes the callback
+  made in the position and velocity buffers are discarded, so the
+  integrator state is unchanged.
+- =LAMMPC_BOUNDARY_REJECT= (1). Positions and velocities are copied
+  back from the pre-step state with =memcpy=. In the LAMMPS embed, image
+  flags are restored with them.
+- =LAMMPC_BOUNDARY_REFLECT= (2). The host has already modified positions
+  and velocities in place. Those buffers become the new state.
+
+Any other code is an error. The pre-step state is restored and the
+apply call returns -1. The embed fix then stops the run.
+
+* Callback
+
+Declared in =include/lammpc_boundary.h=:
+
+#+begin_src c
+int (*LammpcHardBoundaryFn)(void *user, int n_atoms, double *positions,
+                            double *velocities,
+                            const LammpcBoundaryBox *box);
+#+end_src
+
+=positions= and =velocities= each hold =3 * n_atoms= doubles in ascending
+atom-tag order (tag 1 is index 0). Positions are angstroms. Velocities
+are angstroms per picosecond. That is the metal-unit storage of a
+LAMMPS instance, not the Hartree and Bohr force API.
+
+=LammpcBoundaryBox= carries =lo=, =hi=, the restricted-triclinic tilts
+=xy=, =xz=, =yz=, a periodic flag per axis, and =triclinic=.
+
+=lammpc_hard_boundary_apply()= is the decision step itself. It is pure
+C and does not need a LAMMPS instance. A NULL function pointer returns
+accept and does not read the buffers.
+
+Session entry points, on a live embed instance:
+
+- =lammpc_session_set_hard_boundary()= stores the callback. NULL clears it.
+- =lammpc_session_clear_hard_boundary()= clears it.
+- =lammpc_session_integrate()= runs that many LAMMPS steps.
+
+The instance must already exist (a force evaluation builds it) and must
+already have a time integrator and a timestep. A typical =extraSetup=
+is =timestep 0.001= and =fix 1 all nve=. lammpc does not choose the
+integrator.
+
+* Region semantics
+
+This is the same rule as a hard region on a sampler, without sharing
+types or code:
+
+- A point in the closed region is accepted. A planar signed distance of
+  zero is inside.
+- A planar crossing (positive penetration along an outward unit normal)
+  is a reflection. The host mirrors the position through the face and
+  reflects the velocity, then returns reflect.
+- A predicate failure, where no penetration depth is known, is a
+  rejection. Molecular dynamics returns to the previous contained
+  state. Monte Carlo rejection is the same restore.
+- The host may reflect more than once inside a single callback. lammpc
+  calls the callback once per step.
+- If the outward normal has no component in the active constraint, the
+  host rejects and the previous state is restored.
+
+lammpc does not project into a constraint. The host does, because only
+the host knows the tangent space.
+
+* Velocity reflection
+
+For an outward unit normal =n= and a constraint projector =P=:
+
+#+begin_example
+n_t = P n
+n_t = n_t / ||n_t||
+v   = v - 2 (v . n_t) n_t
+v   = P v
+#+end_example
+
+The position is mirrored by the same normal and the penetration depth:
+
+#+begin_example
+x = x - 2 * penetration * n_t
+#+end_example
+
+An unconstrained slab uses the identity projector. In one dimension,
+with outward normal +1 or -1, the normal component of velocity changes
+sign and its square is unchanged, so kinetic energy is unchanged. The
+analytic test uses that identity case.
+
+* LAMMPS fix
+
+The embed path registers style =lammpc/boundary= on the live LAMMPS
+instance by inserting a creator into that instance's fix map. Nothing
+is patched in the LAMMPS sources. The fix id is =lammpc_boundary= and
+the group is =all=.
+
+=lammpc_session_integrate()= adds the fix only when a callback is
+armed, runs =run N=, and removes the fix before returning. The fix
+mask is end-of-step, after the integrator and LAMMPS periodic
+wrap. While the callback is unset, integrate does not add the fix and
+does not snapshot positions or velocities.
+
+Rejection writes the previous positions, velocities, and image flags.
+Reflection writes the host position and velocity buffers and leaves
+image flags as LAMMPS set them. Acceptance writes nothing.
+
+The force loop (=lammpc_session_calculate_result= and =run 0=) does not
+arm the fix. Arming happens only around =lammpc_session_integrate()=.
+
+* Rust
+
+lammpc has no Rust API. There is no closure adapter. A Rust host calls
+the C functions directly and passes a function pointer whose user
+pointer reaches the closure.
+
+* Analytic check
+
+=tests/test_hard_boundary.c= is a stub-suite smoke test. It does not
+build LAMMPS.
+
+- A free particle in the slab =[0, 1]= with velocity +/- 1/2 stays
+  inside for 16 steps of size 1/2. Kinetic energy after every decision
+  equals the initial kinetic energy.
+- A unit harmonic oscillator started at x = 3/8 with velocity 1, in
+  the slab =[-1/2, 1/2]=, stays inside. On each reflection the kinetic
+  energy of the velocity the callback sees is unchanged.
+- A step that leaves the slab and is rejected restores both arrays
+  with =memcmp=, including values the callback wrote before returning
+  reject.
+- Accept discards in-place writes. Reflect keeps them. An unknown code
+  restores the previous state and returns -1.
+- A NULL callback does not dereference its buffers. The stub session
+  entry points return -1 because no LAMMPS library is linked.
+
+* Smoke
+
+#+begin_src sh
+pixi run test-stub
+pixi run test-stub-sanitize
+#+end_src

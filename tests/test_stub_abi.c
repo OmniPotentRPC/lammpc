@@ -31,6 +31,10 @@ static const char *const required_abi_features[] = {
     "abi.lammpc_feature_count",
     "abi.lammpc_feature_table",
     "abi.lammpc_feature_find",
+    "abi.lammpc_hard_boundary_apply",
+    "abi.lammpc_session_set_hard_boundary",
+    "abi.lammpc_session_clear_hard_boundary",
+    "abi.lammpc_session_integrate",
 };
 
 static void test_stub_reports_unavailable(void **state) {

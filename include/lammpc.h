@@ -2,6 +2,7 @@
 #define LAMMPC_H
 
 #include "lammpc_features.h"
+#include "lammpc_boundary.h"
 
 #include <stddef.h>
 
@@ -220,6 +221,38 @@ int lammpc_available(void);
 
 /** @brief Release the owned LAMMPS runtime. */
 void lammpc_finalize(void);
+
+/**
+ * @brief Arm a host hard-boundary callback on one session.
+ *
+ * The callback stays dormant until `lammpc_session_integrate()`. Passing
+ * a NULL function clears it. Clearing removes the embed fix when the
+ * LAMMPS instance is already live, so a later force evaluation does not
+ * carry it. The force loop never calls the callback.
+ *
+ * @return 0 on success, -1 when `session` is NULL or the embed fix cannot
+ * be removed.
+ */
+int lammpc_session_set_hard_boundary(LammpcSession *session,
+                                     LammpcHardBoundaryFn fn, void *user);
+
+/** @brief Clear a hard-boundary callback. Equivalent to setting NULL. */
+int lammpc_session_clear_hard_boundary(LammpcSession *session);
+
+/**
+ * @brief Run `nsteps` LAMMPS integration steps on a live session.
+ *
+ * The instance must already exist and must already have a time integrator
+ * and a timestep (typically `fix nve` and `timestep` in extra setup).
+ * When no callback is armed this is only that run: no fix is added and no
+ * coordinate snapshot is taken. When a callback is armed, fix
+ * `lammpc/boundary` is installed for this run and removed before return.
+ * It calls the host after every step.
+ *
+ * @return 0 on success, -1 on a missing instance, a negative step count,
+ * or a LAMMPS error (see `lammpc_last_error()`).
+ */
+int lammpc_session_integrate(LammpcSession *session, int nsteps);
 
 #ifdef __cplusplus
 }
