@@ -26,6 +26,7 @@
 #include "modify.h"
 #include "neighbor.h"
 #include "pair.h"
+#include "input.h"
 #include "update.h"
 
 #include <cmath>
@@ -100,6 +101,8 @@ struct DecodedParams {
   std::vector<double> masses;
   std::string boundary = "p p p";
   bool newton_pair = true;
+  std::string suffix;
+  std::vector<std::string> extra_setup;
 };
 
 int decode_lammps_params(LammpsParams_ptr params, DecodedParams *out) {
@@ -129,6 +132,15 @@ int decode_lammps_params(LammpsParams_ptr params, DecodedParams *out) {
   capn_resolve(&view.masses.p);
   for (int i = 0; i < view.masses.p.len; ++i)
     out->masses.push_back(capn_to_f64(capn_get64(view.masses, i)));
+  out->suffix = text_string(view.suffix);
+  capn_resolve(&view.extraSetup);
+  if (view.extraSetup.type == CAPN_PTR_LIST ||
+      (view.extraSetup.type == CAPN_LIST && view.extraSetup.len > 0)) {
+    static const capn_text empty_text = {0, "", 0};
+    for (int i = 0; i < view.extraSetup.len; ++i)
+      out->extra_setup.push_back(
+          text_string(capn_get_text(view.extraSetup, i, empty_text)));
+  }
 
   if (out->pair_style.empty()) {
     store_error("LammpsParams.pairStyle is required");
@@ -183,20 +195,6 @@ void destroy_instance(LammpcSession *session) {
   session->box_ready = false;
 }
 
-int ensure_mpi() {
-  int initialized = 0;
-  MPI_Initialized(&initialized);
-  if (!initialized) {
-    int argc = 0;
-    char **argv = nullptr;
-    if (MPI_Init(&argc, &argv) != MPI_SUCCESS) {
-      store_error("MPI_Init failed");
-      return -1;
-    }
-  }
-  return 0;
-}
-
 int type_for_atomic_number(const DecodedParams &params, int z) {
   for (size_t t = 0; t < params.type_to_z.size(); ++t) {
     if (params.type_to_z[t] == z)
@@ -213,15 +211,18 @@ int build_instance(LammpcSession *session, size_t n_atoms,
                    const double *cell_ang, int has_cell) {
   using namespace LAMMPS_NS;
   destroy_instance(session);
-  if (ensure_mpi() != 0)
-    return -1;
 
   const DecodedParams &p = session->params;
-  const char *ctor_args[] = {"lammpc", "-log", "none", "-screen", "none",
-                             "-nocite"};
+  char arg0[] = "lammpc";
+  char arg1[] = "-log";
+  char arg2[] = "none";
+  char arg3[] = "-screen";
+  char arg4[] = "none";
+  char arg5[] = "-nocite";
+  char *ctor_args[] = {arg0, arg1, arg2, arg3, arg4, arg5};
   LAMMPS *lmp = nullptr;
   try {
-    lmp = new LAMMPS(6, const_cast<char **>(ctor_args), MPI_COMM_WORLD);
+    lmp = new LAMMPS(6, ctor_args, MPI_COMM_WORLD);
 
     lmp->update->set_units(p.units_style.c_str());
 
@@ -244,21 +245,24 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     double lo[3] = {0, 0, 0};
     double hi[3] = {0, 0, 0};
     if (has_cell) {
-      for (int d = 0; d < 3; ++d) {
-        lo[d] = 0.0;
-        hi[d] = cell_ang[4 * d]; /* diagonal of the row-major 3x3 cell */
-        if (!(hi[d] > 0.0)) {
-          store_error("only diagonal positive cells are supported");
-          delete lmp;
-          return -1;
-        }
-      }
-      if (cell_ang[1] != 0.0 || cell_ang[2] != 0.0 || cell_ang[3] != 0.0 ||
-          cell_ang[5] != 0.0 || cell_ang[6] != 0.0 || cell_ang[7] != 0.0) {
-        store_error("only diagonal cells are supported");
+      /* ForceInput.box is row-major vectors a,b,c. Map arbitrary triclinic
+       * cells onto LAMMPS restricted triclinic coordinates. */
+      double avec[3] = {cell_ang[0], cell_ang[1], cell_ang[2]};
+      double bvec[3] = {cell_ang[3], cell_ang[4], cell_ang[5]};
+      double cvec[3] = {cell_ang[6], cell_ang[7], cell_ang[8]};
+      double origin[3] = {0.0, 0.0, 0.0};
+      if (avec[0] == 0.0 && avec[1] == 0.0 && avec[2] == 0.0) {
+        store_error("cell a-vector is zero");
         delete lmp;
         return -1;
       }
+      lmp->domain->define_general_triclinic(avec, bvec, cvec, origin);
+      lo[0] = lmp->domain->boxlo[0];
+      lo[1] = lmp->domain->boxlo[1];
+      lo[2] = lmp->domain->boxlo[2];
+      hi[0] = lmp->domain->boxhi[0];
+      hi[1] = lmp->domain->boxhi[1];
+      hi[2] = lmp->domain->boxhi[2];
     } else {
       /* Shrink-wrapped styles come from boundary; still need an initial
        * extent covering the atoms. */
@@ -282,6 +286,13 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     for (int d = 0; d < 3; ++d) {
       lmp->domain->boxlo[d] = lo[d];
       lmp->domain->boxhi[d] = hi[d];
+    }
+    if (!has_cell) {
+      lmp->domain->triclinic = 0;
+      lmp->domain->triclinic_general = 0;
+      lmp->domain->xy = 0.0;
+      lmp->domain->xz = 0.0;
+      lmp->domain->yz = 0.0;
     }
     lmp->domain->box_exist = 1;
     lmp->domain->set_initial_box();
@@ -320,11 +331,16 @@ int build_instance(LammpcSession *session, size_t n_atoms,
                          positions_ang[3 * i + 2]};
       lmp->atom->avec->create_atom(type, coord);
     }
-    lmp->atom->natoms = (double)n_atoms;
+    lmp->atom->natoms = static_cast<LAMMPS_NS::bigint>(n_atoms);
     lmp->atom->tag_extend();
 
     lmp->force->newton = lmp->force->newton_pair = lmp->force->newton_bond =
         p.newton_pair ? 1 : 0;
+
+    if (!p.suffix.empty()) {
+      std::string cmd = "suffix " + p.suffix;
+      lmp->input->one(cmd.c_str());
+    }
 
     /* Pair style + coefficients through the actual member functions. */
     {
@@ -347,6 +363,10 @@ int build_instance(LammpcSession *session, size_t n_atoms,
           split_tokens(coeff_line.c_str(), (int)coeff_line.size());
       auto argv = argv_view(coeff_tokens);
       lmp->force->pair->coeff((int)coeff_tokens.size(), argv.data());
+    }
+    for (const auto &line : session->params.extra_setup) {
+      if (!line.empty())
+        lmp->input->one(line.c_str());
     }
 
     /* Init + neighbor build + first force evaluation. */
@@ -386,7 +406,7 @@ bool geometry_matches(const LammpcSession *session, size_t n_atoms,
  * pair compute, energy + per-tag forces out (Hartree / Hartree/Bohr). */
 int evaluate(LammpcSession *session, size_t n_atoms,
              const double *positions_ang, double *energy_h,
-             double *forces_h_bohr) {
+             double *forces_h_bohr, double *stress_h_bohr3) {
   using namespace LAMMPS_NS;
   LAMMPS *lmp = session->lmp;
   if (!lmp || lmp->atom->nlocal != (int)n_atoms) {
@@ -410,18 +430,9 @@ int evaluate(LammpcSession *session, size_t n_atoms,
   }
 
   try {
-    /* Re-neighbor through the same path a timestep uses. */
-    lmp->update->whichflag = 1;
-    lmp->update->integrate->setup_minimal(1);
-    lmp->update->whichflag = 0;
-
-    /* Direct force pass with the global energy accumulators enabled. */
-    int nall = atom->nlocal + atom->nghost;
-    if (nall > 0)
-      std::memset(&atom->f[0][0], 0, sizeof(double) * 3 * (size_t)nall);
-    lmp->force->pair->compute(1, 0);
-    if (lmp->force->newton_pair)
-      lmp->comm->reverse_comm();
+    /* Force pass through LAMMPS' own run path so every pair style gets the
+     * exact ev/virial setup it expects. */
+    lmp->input->one("run 0 pre no post no");
   } catch (std::exception &ex) {
     store_error(ex.what());
     return -1;
@@ -438,6 +449,31 @@ int evaluate(LammpcSession *session, size_t n_atoms,
         forces_h_bohr[3 * caller + d] =
             f[i][d] * kAngstromPerBohr / kEvPerHartree;
     }
+  }
+  if (stress_h_bohr3) {
+    const double volume_ang3 =
+        lmp->domain->xprd * lmp->domain->yprd * lmp->domain->zprd;
+    if (!(volume_ang3 > 0.0)) {
+      store_error("non-positive cell volume");
+      return -1;
+    }
+    const double evA3_to_hbohr3 =
+        (1.0 / kEvPerHartree) * std::pow(kAngstromPerBohr, 3.0);
+    const double xx = -lmp->force->pair->virial[0] / volume_ang3;
+    const double yy = -lmp->force->pair->virial[1] / volume_ang3;
+    const double zz = -lmp->force->pair->virial[2] / volume_ang3;
+    const double xy = -lmp->force->pair->virial[3] / volume_ang3;
+    const double xz = -lmp->force->pair->virial[4] / volume_ang3;
+    const double yz = -lmp->force->pair->virial[5] / volume_ang3;
+    stress_h_bohr3[0] = xx * evA3_to_hbohr3;
+    stress_h_bohr3[1] = xy * evA3_to_hbohr3;
+    stress_h_bohr3[2] = xz * evA3_to_hbohr3;
+    stress_h_bohr3[3] = xy * evA3_to_hbohr3;
+    stress_h_bohr3[4] = yy * evA3_to_hbohr3;
+    stress_h_bohr3[5] = yz * evA3_to_hbohr3;
+    stress_h_bohr3[6] = xz * evA3_to_hbohr3;
+    stress_h_bohr3[7] = yz * evA3_to_hbohr3;
+    stress_h_bohr3[8] = zz * evA3_to_hbohr3;
   }
   return 0;
 }
@@ -659,15 +695,27 @@ LammpcResult lammpc_session_calculate_result(
 
   double energy_h = 0.0;
   std::vector<double> forces_h_bohr(n_atoms * 3u);
+  double stress_h_bohr3[9] = {0};
   if (evaluate(session, n_atoms, positions_ang.data(), &energy_h,
-               forces_h_bohr.data()) != 0)
+               forces_h_bohr.data(), stress_h_bohr3) != 0)
     return fail_result(g_last_error);
 
   std::vector<double> forces_out(n_atoms * 3u);
   for (size_t i = 0; i < forces_out.size(); ++i)
     forces_out[i] = forces_h_bohr[i] * force_factor;
+  const double length_factor =
+      energy_factor != 0.0
+          ? force_factor * kAngstromPerBohr / energy_factor
+          : 1.0;
+  const double stress_factor =
+      energy_factor *
+      std::pow(length_factor / kAngstromPerBohr, 3.0);
+  double stress_out[9];
+  for (int i = 0; i < 9; ++i)
+    stress_out[i] = stress_h_bohr3[i] * stress_factor;
   if (lammpc_potential_result_write(energy_h * energy_factor,
                                     forces_out.data(), forces_out.size(),
+                                    stress_out,
                                     potential_result_capnp,
                                     potential_result_capnp_capacity_bytes,
                                     potential_result_capnp_size_bytes) != 0)

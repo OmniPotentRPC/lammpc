@@ -7,6 +7,10 @@
 #define LAMMPC_BOHR_TO_ANGSTROM 0.529177210903
 #define LAMMPC_HARTREE_TO_EV 27.211386245988
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Root a flat `ForceInput` message; caller releases via
  * `lammpc_params_release()`. */
 int lammpc_force_input_root(const void *force_input_capnp,
@@ -39,6 +43,11 @@ size_t lammpc_potential_result_flat_size(size_t force_count);
 /** Write energy + forces into a flat `PotentialResult` message. */
 int lammpc_potential_result_write(double energy, const double *forces,
                                   size_t force_count,
+                                  const double *stress_opt,
                                   void *potential_result_capnp,
                                   size_t potential_result_capacity_bytes,
                                   size_t *potential_result_size_bytes);
+
+#ifdef __cplusplus
+}
+#endif

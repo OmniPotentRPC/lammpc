@@ -139,8 +139,8 @@ static void test_potential_result_write_and_read(void **state) {
   unsigned char *buf = (unsigned char *)malloc(need);
   assert_non_null(buf);
   size_t wrote = 0;
-  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, buf, need,
-                                                 &wrote),
+  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, NULL, buf,
+                                                 need, &wrote),
                    0);
   assert_true(wrote > 0);
 

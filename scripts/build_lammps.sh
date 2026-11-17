@@ -4,7 +4,7 @@
 # compiles against. CI caches the whole install dir keyed on LAMMPS_TAG.
 set -euo pipefail
 
-LAMMPS_TAG="${LAMMPS_TAG:-stable_22Jul2025}"
+LAMMPS_TAG="${LAMMPS_TAG:-stable_22Jul2025_update2}"
 PREFIX="${PWD}/.lammps-install"
 
 if [ -f "${PREFIX}/.built-${LAMMPS_TAG}" ]; then
@@ -13,17 +13,18 @@ if [ -f "${PREFIX}/.built-${LAMMPS_TAG}" ]; then
 fi
 
 workdir="$(mktemp -d)"
-trap 'rm -rf "${workdir}"' EXIT
+trap 'rm -rf "${workdir:?}"' EXIT
 
 curl -sL "https://github.com/lammps/lammps/archive/refs/tags/${LAMMPS_TAG}.tar.gz" \
   -o "${workdir}/lammps.tar.gz"
 tar -C "${workdir}" -xzf "${workdir}/lammps.tar.gz"
-src_dir="$(find "${workdir}" -maxdepth 1 -type d -name 'lammps-*' | head -1)"
+src_dir="${workdir}/lammps-${LAMMPS_TAG}"
 
 cmake -S "${src_dir}/cmake" -B "${workdir}/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_MPI=no \
   -DBUILD_OMP=no \
+  -DPKG_MANYBODY=on \
   -DBUILD_SHARED_LIBS=on \
   -DBUILD_TOOLS=no \
   -DCMAKE_INSTALL_PREFIX="${PREFIX}"
@@ -34,6 +35,10 @@ mkdir -p "${PREFIX}/include-src"
 cp "${src_dir}/src/"*.h "${PREFIX}/include-src/"
 mkdir -p "${PREFIX}/include-src/STUBS"
 cp "${src_dir}/src/STUBS/"*.h "${PREFIX}/include-src/STUBS/"
+mkdir -p "${PREFIX}/include-src/fmt"
+cp "${src_dir}/src/fmt/"*.h "${PREFIX}/include-src/fmt/"
+mkdir -p "${PREFIX}/include-src/nlohmann"
+cp "${src_dir}/src/nlohmann/"*.hpp "${PREFIX}/include-src/nlohmann/"
 
 touch "${PREFIX}/.built-${LAMMPS_TAG}"
 echo "liblammps ${LAMMPS_TAG} installed at ${PREFIX}"

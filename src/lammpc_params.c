@@ -213,6 +213,7 @@ size_t lammpc_potential_result_flat_size(size_t force_count) {
 
 int lammpc_potential_result_write(double energy, const double *forces,
                                   size_t force_count,
+                                  const double *stress_opt,
                                   void *potential_result_capnp,
                                   size_t potential_result_capacity_bytes,
                                   size_t *potential_result_size_bytes) {
@@ -245,6 +246,12 @@ int lammpc_potential_result_write(double energy, const double *forces,
   memset(&view, 0, sizeof(view));
   view.energy = energy;
   view.forces = force_list;
+  if (stress_opt) {
+    capn_list64 stress_list = capn_new_list64(root.seg, 9);
+    for (int i = 0; i < 9; ++i)
+      capn_set64(stress_list, i, capn_from_f64(stress_opt[i]));
+    view.stress = stress_list;
+  }
   view.embedMdPropsSkipped = 1;
   write_PotentialResult(&view, result);
   if (capn_setp(root, 0, result.p) != 0) {
