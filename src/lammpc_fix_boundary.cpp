@@ -14,8 +14,10 @@
 #include "domain.h"
 #include "error.h"
 #include "fix.h"
+#include "integrate.h"
 #include "lammps.h"
 #include "modify.h"
+#include "update.h"
 
 #include <cstdio>
 #include <cstring>
@@ -87,9 +89,11 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
     if (decision == LAMMPC_BOUNDARY_REJECT)
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   1);
-    else if (decision == LAMMPC_BOUNDARY_REFLECT)
+    else if (decision == LAMMPC_BOUNDARY_REFLECT) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   0);
+      update->integrate->setup_minimal(1);
+    }
     capture_previous();
   }
 

@@ -71,6 +71,45 @@ static size_t make_config(const char *boundary, unsigned char *dst,
   return written;
 }
 
+static size_t make_lj_config(unsigned char *dst, size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  capn_ptr coeffs = capn_new_ptr_list(seg, 1);
+  const char *coeff_value = "1 1 0.2 2.5";
+  capn_text coeff = {(int)strlen(coeff_value), (char *)coeff_value, 0};
+  assert_int_equal(capn_set_text(coeffs, 0, coeff), 0);
+  capn_list32 type_map = capn_new_list32(seg, 1);
+  capn_set32(type_map, 0, 29);
+  capn_list64 masses = capn_new_list64(seg, 1);
+  capn_set64(masses, 0, capn_from_f64(63.546));
+
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.atomStyle = (capn_text){6, "atomic", NULL};
+  pview.pairStyle = (capn_text){11, "lj/cut 10.0", NULL};
+  pview.pairCoeffs = coeffs;
+  pview.typeToAtomicNumber = type_map;
+  pview.masses = masses;
+  pview.newtonPair = 1;
+  pview.boundary = (capn_text){5, (char *)"f f f", NULL};
+  write_LammpsParams(&pview, params);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  write_PotentialConfig(&cview, config);
+
+  size_t written = write_flat(&arena, config.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
 static size_t make_step(const double *positions_ang, const int *z, int n_atoms,
                         const double *box9, unsigned char *dst,
                         size_t dst_size) {
@@ -201,6 +240,67 @@ static int count_boundary_calls(void *user, int n_atoms, double *positions,
   return LAMMPC_BOUNDARY_ACCEPT;
 }
 
+static int shift_lj_boundary(void *user, int n_atoms, double *positions,
+                             double *velocities,
+                             const LammpcBoundaryBox *box) {
+  (void)velocities;
+  (void)box;
+  int *calls = static_cast<int *>(user);
+  *calls += 1;
+  assert_int_equal(n_atoms, 2);
+  positions[0] -= 0.05;
+  positions[3] += 0.05;
+  return LAMMPC_BOUNDARY_REFLECT;
+}
+
+static double lj_force(double separation) {
+  const double sr6 = pow(2.5 / separation, 6.0);
+  return 24.0 * 0.2 * (2.0 * sr6 * sr6 - sr6) / separation;
+}
+
+static void test_reflect_refreshes_lammps_forces(void **state) {
+  (void)state;
+  unsigned char config[16384];
+  const size_t config_size = make_lj_config(config, sizeof(config));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double box9[9] = {20.0, 0.0, 0.0, 0.0, 20.0,
+                          0.0,  0.0, 0.0, 20.0};
+  const int z[2] = {29, 29};
+  const double initial_positions[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  LammpcResult result =
+      run_step(session, initial_positions, z, 2, box9);
+  if (!result.ok)
+    fail_msg("LJ reflection setup failed: %s", result.message);
+
+  const double velocities[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  assert_int_equal(lammpc_session_nve_set_velocities(session, velocities, 6),
+                   0);
+  if (run_cmd(session->lmp, "timestep 0.000001") != 0 ||
+      run_cmd(session->lmp, "fix 1 all nve") != 0)
+    fail_msg("LJ reflection integrator setup failed: %s", lammpc_last_error());
+
+  int calls = 0;
+  assert_int_equal(
+      lammpc_session_set_hard_boundary(session, shift_lj_boundary, &calls), 0);
+  assert_int_equal(lammpc_session_integrate(session, 1), 0);
+  assert_int_equal(calls, 1);
+
+  double positions[6] = {};
+  double forces[6] = {};
+  lammps_gather_atoms(session->lmp, "x", 1, 3, positions);
+  lammps_gather_atoms(session->lmp, "f", 1, 3, forces);
+  const double separation = positions[3] - positions[0];
+  const double expected_force = lj_force(separation);
+  assert_true(fabs(forces[3] - expected_force) <
+              fabs(expected_force) * 1.0e-10);
+  assert_true(fabs(forces[0] + expected_force) <
+              fabs(expected_force) * 1.0e-10);
+  lammpc_session_destroy(session);
+}
+
 /*
  * Destroy drops the host callback before it closes LAMMPS. Attach the
  * fix, prove one step calls the host, disarm, and prove the next step
@@ -246,6 +346,7 @@ int main(void) {
       cmocka_unit_test(test_upper_face_precision_orthogonal),
       cmocka_unit_test(test_upper_face_precision_triclinic),
       cmocka_unit_test(test_atom_count_mismatch_fails_loudly),
+      cmocka_unit_test(test_reflect_refreshes_lammps_forces),
       cmocka_unit_test(test_destroy_disarms_hard_boundary),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
