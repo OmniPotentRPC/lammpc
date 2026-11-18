@@ -19,6 +19,8 @@ static const char *const required_abi_features[] = {
     "abi.lammpc_session_configure",
     "abi.lammpc_session_destroy",
     "abi.lammpc_session_md_initialize",
+    "abi.lammpc_session_md_set_velocities",
+    "abi.lammpc_session_masses",
     "abi.lammpc_session_md_step",
     "abi.lammpc_session_md_state",
     "abi.lammpc_session_nve_set_positions",
@@ -62,6 +64,8 @@ static void test_stub_reports_unavailable(void **state) {
   assert_int_not_equal(lammpc_session_md_initialize(NULL, NULL, 0, NULL, NULL, 0,
                                                     NULL),
                        0);
+  assert_int_not_equal(lammpc_session_md_set_velocities(NULL, NULL, 0, 0), 0);
+  assert_int_not_equal(lammpc_session_masses(NULL, NULL, 0), 0);
   assert_int_not_equal(lammpc_session_md_step(NULL, 0), 0);
   assert_int_not_equal(
       lammpc_session_md_state(NULL, NULL, NULL, NULL, NULL, 0, NULL), 0);
@@ -103,6 +107,15 @@ static void test_stub_reports_unavailable(void **state) {
   const LammpcFeatureEntry *features = lammpc_feature_table();
   assert_non_null(features);
   assert_true(lammpc_feature_count() > 0);
+  size_t abi_rows = 0;
+  for (size_t row = 0; row < lammpc_feature_count(); ++row) {
+    if (features[row].kind == LAMMPC_FEATURE_ABI)
+      abi_rows += 1;
+  }
+  assert_int_equal(abi_rows, sizeof(required_abi_features) /
+                                 sizeof(required_abi_features[0]));
+  assert_non_null(lammpc_feature_find("abi.lammpc_session_md_set_velocities"));
+  assert_non_null(lammpc_feature_find("abi.lammpc_session_masses"));
   for (size_t i = 0;
        i < sizeof(required_abi_features) / sizeof(required_abi_features[0]);
        ++i) {

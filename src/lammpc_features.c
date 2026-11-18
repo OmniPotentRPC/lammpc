@@ -16,6 +16,8 @@ static const LammpcFeatureEntry kFeatures[] = {
     {"abi.lammpc_session_configure", LAMMPC_FEATURE_ABI, 1, 1},
     {"abi.lammpc_session_destroy", LAMMPC_FEATURE_ABI, 1, 1},
     {"abi.lammpc_session_md_initialize", LAMMPC_FEATURE_ABI, 1, 1},
+    {"abi.lammpc_session_md_set_velocities", LAMMPC_FEATURE_ABI, 1, 1},
+    {"abi.lammpc_session_masses", LAMMPC_FEATURE_ABI, 1, 1},
     {"abi.lammpc_session_md_step", LAMMPC_FEATURE_ABI, 1, 1},
     {"abi.lammpc_session_md_state", LAMMPC_FEATURE_ABI, 1, 1},
     {"abi.lammpc_session_nve_set_positions", LAMMPC_FEATURE_ABI, 1, 1},
