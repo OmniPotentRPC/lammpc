@@ -522,6 +522,12 @@ uint64_t splitmix64(uint64_t *state) {
   return z ^ (z >> 31);
 }
 
+void md_seed(LammpcSession *session, unsigned long long value) {
+  uint64_t seed = (uint64_t)value;
+  for (uint64_t &slot : session->md_rng)
+    slot = splitmix64(&seed);
+}
+
 uint64_t md_random_u64(LammpcSession *session) {
   uint64_t *s = session->md_rng;
   const uint64_t result =
@@ -897,8 +903,10 @@ int lammpc_session_md_initialize(
         std::isfinite(config->thermal_energy_ev) &&
         config->thermal_energy_ev > 0.0 &&
         std::isfinite(config->friction_per_ps) &&
-        config->friction_per_ps > 0.0)) {
-    store_error("constrained MD controls must be finite and positive");
+        config->friction_per_ps >= 0.0)) {
+    store_error(
+        "constrained MD timestep and thermal energy must be finite and "
+        "positive; friction must be finite and non-negative");
     return -1;
   }
   if (config->coordinates != LAMMPC_PLANE_MASS_WEIGHTED &&
@@ -980,9 +988,7 @@ int lammpc_session_md_initialize(
     return -1;
   }
 
-  uint64_t seed = (uint64_t)config->seed;
-  for (uint64_t &slot : session->md_rng)
-    slot = splitmix64(&seed);
+  md_seed(session, config->seed);
   for (size_t i = 0; i < coordinate_count; ++i) {
     const double sigma =
         std::sqrt(config->thermal_energy_ev /
@@ -1002,14 +1008,62 @@ int lammpc_session_md_initialize(
   return 0;
 }
 
+int lammpc_session_md_set_velocities(
+    LammpcSession *session, const double *velocities_ang_ps,
+    size_t coordinate_count, unsigned long long seed) {
+  if (!session || !session->md_ready || !velocities_ang_ps ||
+      coordinate_count != session->md_velocities.size()) {
+    store_error("constrained MD velocity input has the wrong size");
+    return -1;
+  }
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    if (!std::isfinite(velocities_ang_ps[i])) {
+      store_error("constrained MD velocities must be finite");
+      return -1;
+    }
+  }
+  std::copy(velocities_ang_ps, velocities_ang_ps + coordinate_count,
+            session->md_velocities.begin());
+  md_project_velocity(session);
+  md_seed(session, seed);
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_masses(LammpcSession *session, double *masses_amu,
+                          size_t atom_count) {
+  if (!session || !masses_amu || atom_count != session->n_atoms ||
+      session->atom_types.size() != atom_count || !session->lmp) {
+    store_error("session mass output has the wrong size");
+    return -1;
+  }
+  auto *atom_data = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp)->atom;
+  for (size_t atom = 0; atom < atom_count; ++atom) {
+    const int type = session->atom_types[atom];
+    if (type <= 0 || type > atom_data->ntypes) {
+      store_error("session atom type has no mass");
+      return -1;
+    }
+    const double mass = atom_data->mass[type];
+    if (!(std::isfinite(mass) && mass > 0.0)) {
+      store_error("session mass must be finite and positive");
+      return -1;
+    }
+    masses_amu[atom] = mass;
+  }
+  clear_error();
+  return 0;
+}
+
 int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   if (!session || !session->md_ready) {
     store_error("constrained MD is not initialized");
     return -1;
   }
   const double h = session->md_config.time_step_ps;
+  const bool pure_nve = session->md_config.friction_per_ps == 0.0;
   const double decay =
-      std::exp(-session->md_config.friction_per_ps * h);
+      pure_nve ? 1.0 : std::exp(-session->md_config.friction_per_ps * h);
   std::vector<double> previous_positions;
   std::vector<double> previous_velocities;
   std::vector<double> previous_forces;
@@ -1043,13 +1097,15 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
     for (size_t i = 0; i < session->md_positions.size(); ++i)
       session->md_positions[i] += 0.5 * h * session->md_velocities[i];
     md_restore_position(session);
-    for (size_t i = 0; i < session->md_velocities.size(); ++i) {
-      const double kick =
-          std::sqrt(session->md_config.thermal_energy_ev *
-                    (1.0 - decay * decay) /
-                    (session->md_masses[i] * kMassVelocityToEv));
-      session->md_velocities[i] =
-          decay * session->md_velocities[i] + kick * md_normal(session);
+    if (!pure_nve) {
+      for (size_t i = 0; i < session->md_velocities.size(); ++i) {
+        const double kick =
+            std::sqrt(session->md_config.thermal_energy_ev *
+                      (1.0 - decay * decay) /
+                      (session->md_masses[i] * kMassVelocityToEv));
+        session->md_velocities[i] =
+            decay * session->md_velocities[i] + kick * md_normal(session);
+      }
     }
     md_project_velocity(session);
     for (size_t i = 0; i < session->md_positions.size(); ++i)
