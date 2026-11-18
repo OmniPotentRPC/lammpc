@@ -1,4 +1,2 @@
 self-hosted-runner:
-  labels:
-    - ubuntu-24.04-arm
-    - macos-15-intel
+  labels: []

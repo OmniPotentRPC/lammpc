@@ -13,6 +13,7 @@ on:
       - newsfragments/**
       - LICENSE
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     branches: [main]
     paths-ignore:
       - docs/**
@@ -45,10 +46,15 @@ jobs:
         run: pixi run test-stub-sanitize
 
   embed:
-    if: github.event_name == 'workflow_dispatch' || github.ref ==
-      'refs/heads/main' || github.ref == 'refs/heads/develop' ||
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/develop' ||
       startsWith(github.ref, 'refs/tags/') ||
-      contains(github.event.pull_request.labels.*.name, 'ci:full')
+      contains(github.event.pull_request.labels.*.name, 'ci:full') ||
+      (github.event_name == 'pull_request' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'ci:full')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,12 +62,22 @@ jobs:
         with:
           pixi-version: latest
           cache: true
+      - name: Resolve LAMMPS tag
+        run: |
+          tag="$(bash scripts/build_lammps.sh --print-tag)"
+          if [ -z "${tag}" ]; then
+            echo "scripts/build_lammps.sh did not report a LAMMPS tag" >&2
+            exit 1
+          fi
+          echo "LAMMPS_TAG=${tag}" >> "${GITHUB_ENV}"
       - name: Cache liblammps
         uses: actions/cache@v4
         with:
           path: .lammps-install
-          key: liblammps-stable_22Jul2025-serial-v1
+          key: liblammps-${{ env.LAMMPS_TAG }}-serial-v1
       - name: Build liblammps (on cache miss)
+        env:
+          LAMMPS_TAG: ${{ env.LAMMPS_TAG }}
         run: pixi run -e embed build-lammps
       - name: Embed suite (real liblammps, LJ analytic E2E)
         run: pixi run -e embed test-embed
@@ -74,12 +90,22 @@ jobs:
         with:
           pixi-version: latest
           cache: true
+      - name: Resolve LAMMPS tag
+        run: |
+          tag="$(bash scripts/build_lammps.sh --print-tag)"
+          if [ -z "${tag}" ]; then
+            echo "scripts/build_lammps.sh did not report a LAMMPS tag" >&2
+            exit 1
+          fi
+          echo "LAMMPS_TAG=${tag}" >> "${GITHUB_ENV}"
       - name: Cache liblammps
         uses: actions/cache@v4
         with:
           path: .lammps-install
-          key: liblammps-stable_22Jul2025-serial-v1
+          key: liblammps-${{ env.LAMMPS_TAG }}-serial-v1
       - name: Build liblammps (on cache miss)
+        env:
+          LAMMPS_TAG: ${{ env.LAMMPS_TAG }}
         run: pixi run -e embed build-lammps
       - name: Concurrent sessions under ThreadSanitizer
         run: pixi run -e embed test-embed-tsan
