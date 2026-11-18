@@ -845,6 +845,17 @@ static void test_md_two_session_replay_is_byte_identical(void **state) {
   assert_int_equal(lammpc_session_md_initialize(
                        second, step, step_size, point, normal, 6, &controls),
                    0);
+  double masses[2] = {0.0, 0.0};
+  assert_int_equal(lammpc_session_masses(first, masses, 2), 0);
+  assert_true(fabs(masses[0] - 63.546) < 1.0e-12);
+  assert_true(fabs(masses[1] - 63.546) < 1.0e-12);
+  const double initial_velocities[6] = {0.0, 0.25, 0.0, 0.0, -0.25, 0.0};
+  assert_int_equal(lammpc_session_md_set_velocities(
+                       first, initial_velocities, 6, controls.seed),
+                   0);
+  assert_int_equal(lammpc_session_md_set_velocities(
+                       second, initial_velocities, 6, controls.seed),
+                   0);
   assert_int_equal(lammpc_session_md_step(first, 64), 0);
   assert_int_equal(lammpc_session_md_step(second, 64), 0);
 

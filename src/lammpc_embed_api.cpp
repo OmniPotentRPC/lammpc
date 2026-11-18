@@ -594,6 +594,12 @@ uint64_t splitmix64(uint64_t *state) {
   return z ^ (z >> 31);
 }
 
+void md_seed(LammpcSession *session, unsigned long long value) {
+  uint64_t seed = (uint64_t)value;
+  for (uint64_t &slot : session->md_rng)
+    slot = splitmix64(&seed);
+}
+
 uint64_t md_random_u64(LammpcSession *session) {
   uint64_t *s = session->md_rng;
   const uint64_t result =
@@ -1058,9 +1064,7 @@ int lammpc_session_md_initialize(
     return -1;
   }
 
-  uint64_t seed = (uint64_t)config->seed;
-  for (uint64_t &slot : session->md_rng)
-    slot = splitmix64(&seed);
+  md_seed(session, config->seed);
   for (size_t i = 0; i < coordinate_count; ++i) {
     const double sigma =
         std::sqrt(config->thermal_energy_ev /
@@ -1075,6 +1079,52 @@ int lammpc_session_md_initialize(
   if (md_evaluate(session) != 0) {
     session->md_ready = false;
     return -1;
+  }
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_md_set_velocities(
+    LammpcSession *session, const double *velocities_ang_ps,
+    size_t coordinate_count, unsigned long long seed) {
+  if (!session || !session->md_ready || !velocities_ang_ps ||
+      coordinate_count != session->md_velocities.size()) {
+    store_error("constrained MD velocity input has the wrong size");
+    return -1;
+  }
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    if (!std::isfinite(velocities_ang_ps[i])) {
+      store_error("constrained MD velocities must be finite");
+      return -1;
+    }
+  }
+  std::copy(velocities_ang_ps, velocities_ang_ps + coordinate_count,
+            session->md_velocities.begin());
+  md_project_velocity(session);
+  md_seed(session, seed);
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_masses(LammpcSession *session, double *masses_amu,
+                          size_t atom_count) {
+  if (!session || !masses_amu || atom_count != session->n_atoms ||
+      session->atom_types.size() != atom_count) {
+    store_error("session mass output has the wrong size");
+    return -1;
+  }
+  for (size_t atom = 0; atom < atom_count; ++atom) {
+    const int type = session->atom_types[atom];
+    if (type <= 0 || (size_t)type > session->params.masses.size()) {
+      store_error("session atom type has no mass");
+      return -1;
+    }
+    const double mass = session->params.masses[(size_t)type - 1u];
+    if (!(std::isfinite(mass) && mass > 0.0)) {
+      store_error("session mass must be finite and positive");
+      return -1;
+    }
+    masses_amu[atom] = mass;
   }
   clear_error();
   return 0;
