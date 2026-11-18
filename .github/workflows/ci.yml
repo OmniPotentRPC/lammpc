@@ -47,3 +47,5 @@ jobs:
         run: pixi run -e embed build-lammps
       - name: Embed suite (real liblammps, LJ analytic E2E)
         run: pixi run -e embed test-embed
+      - name: Concurrent sessions under ThreadSanitizer
+        run: pixi run -e embed test-embed-tsan

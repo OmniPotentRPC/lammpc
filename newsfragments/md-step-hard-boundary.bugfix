@@ -2,4 +2,7 @@ The hard-boundary callback now runs once after each completed constrained-MD
 step; rejected steps restore force bookkeeping and reflected steps are
 re-projected and force-re-evaluated. Rejected Langevin proposals retain their
 consumed random draws so retries use fresh noise. Reflected LAMMPS integration
-refreshes forces at the callback-adjusted position.
+refreshes forces at the callback-adjusted position, while rejected integration
+refreshes forces, energy, and virial data at the restored position. Callback
+state is owned by each session and fix instance, so independent sessions can
+set, clear, and destroy callbacks concurrently.

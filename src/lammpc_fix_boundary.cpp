@@ -23,7 +23,6 @@
 #include <cstring>
 #include <exception>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -39,7 +38,20 @@ struct BoundaryBinding {
   void *user = nullptr;
 };
 
-std::unordered_map<LAMMPS_NS::LAMMPS *, BoundaryBinding> g_bindings;
+thread_local const BoundaryBinding *g_pending_binding = nullptr;
+
+class PendingBindingScope {
+ public:
+  explicit PendingBindingScope(const BoundaryBinding *binding)
+      : previous_(g_pending_binding) {
+    g_pending_binding = binding;
+  }
+
+  ~PendingBindingScope() { g_pending_binding = previous_; }
+
+ private:
+  const BoundaryBinding *previous_;
+};
 
 void set_boundary_error(const char *message) {
   if (!message)
@@ -51,6 +63,9 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
  public:
   FixLammpcBoundary(LAMMPS_NS::LAMMPS *lmp, int narg, char **arg)
       : Fix(lmp, narg, arg) {
+    if (!g_pending_binding || !g_pending_binding->fn)
+      error->all(FLERR, "lammpc hard boundary fix has no callback");
+    binding_ = *g_pending_binding;
     nevery = 1;
     time_integrate = 0;
     dynamic_group_allow = 1;
@@ -61,8 +76,7 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
   void setup(int) override { capture_previous(); }
 
   void end_of_step() override {
-    auto found = g_bindings.find(lmp);
-    if (found == g_bindings.end() || !found->second.fn)
+    if (!binding_.fn)
       return;
 
     const int n_atoms = serial_atom_count();
@@ -77,7 +91,7 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
     LammpcBoundaryBox box = {};
     fill_box(&box);
     const int decision = lammpc_hard_boundary_apply(
-        found->second.fn, found->second.user, n_atoms, positions.data(),
+        binding_.fn, binding_.user, n_atoms, positions.data(),
         velocities.data(), previous_positions_.data(),
         previous_velocities_.data(), &box);
     if (decision < 0) {
@@ -86,10 +100,11 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
       capture_previous();
       error->all(FLERR, "lammpc hard boundary callback failed");
     }
-    if (decision == LAMMPC_BOUNDARY_REJECT)
+    if (decision == LAMMPC_BOUNDARY_REJECT) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   1);
-    else if (decision == LAMMPC_BOUNDARY_REFLECT) {
+      update->integrate->setup_minimal(1);
+    } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   0);
       update->integrate->setup_minimal(1);
@@ -97,7 +112,12 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
     capture_previous();
   }
 
+  void set_callback(LammpcHardBoundaryFn fn, void *user) {
+    binding_ = BoundaryBinding{fn, user};
+  }
+
  private:
+  BoundaryBinding binding_;
   std::vector<double> previous_positions_;
   std::vector<double> previous_velocities_;
   std::vector<imageint> previous_images_;
@@ -192,15 +212,18 @@ int lammpc_embed_boundary_attach(void *handle, LammpcHardBoundaryFn fn,
   auto *lmp = static_cast<LAMMPS_NS::LAMMPS *>(handle);
   try {
     (*lmp->modify->fix_map)["lammpc/boundary"] = &create_boundary_fix;
-    g_bindings[lmp] = BoundaryBinding{fn, user};
-    if (lmp->modify->get_fix_by_id("lammpc_boundary") == nullptr)
+    auto *fix = lmp->modify->get_fix_by_id("lammpc_boundary");
+    if (fix != nullptr) {
+      static_cast<FixLammpcBoundary *>(fix)->set_callback(fn, user);
+    } else {
+      const BoundaryBinding binding{fn, user};
+      const PendingBindingScope scope(&binding);
       lmp->modify->add_fix("lammpc_boundary all lammpc/boundary", 0);
+    }
   } catch (const std::exception &ex) {
-    g_bindings.erase(lmp);
     set_boundary_error(ex.what());
     return -1;
   } catch (...) {
-    g_bindings.erase(lmp);
     set_boundary_error("hard boundary fix registration failed");
     return -1;
   }
@@ -212,7 +235,6 @@ int lammpc_embed_boundary_detach(void *handle) {
   if (!handle)
     return 0;
   auto *lmp = static_cast<LAMMPS_NS::LAMMPS *>(handle);
-  g_bindings.erase(lmp);
   try {
     if (lmp->modify->get_fix_by_id("lammpc_boundary") != nullptr)
       lmp->modify->delete_fix("lammpc_boundary");
@@ -230,7 +252,10 @@ int lammpc_embed_boundary_detach(void *handle) {
 void lammpc_embed_boundary_disarm(void *handle) {
   if (!handle)
     return;
-  g_bindings.erase(static_cast<LAMMPS_NS::LAMMPS *>(handle));
+  auto *lmp = static_cast<LAMMPS_NS::LAMMPS *>(handle);
+  auto *fix = lmp->modify->get_fix_by_id("lammpc_boundary");
+  if (fix != nullptr)
+    static_cast<FixLammpcBoundary *>(fix)->set_callback(nullptr, nullptr);
 }
 
 const char *lammpc_embed_boundary_error(void) { return g_boundary_error; }

@@ -241,5 +241,21 @@ if get_option('with_tests')
       suite: ['e2e'],
       timeout: 180,
     )
+    test(
+      'embed-boundary-threads-e2e',
+      executable(
+        'test_embed_boundary_threads_e2e',
+        ['tests/test_embed_boundary_threads_e2e.cpp'] + lammpc_params_sources +
+        lammpc_embed_companion_sources,
+        dependencies: [cmocka_dep, dependency('threads')] + lammpc_params_deps +
+                      lammpc_backend_deps,
+        include_directories: [inc] + lammpc_params_includes,
+        c_args: common_c_args,
+        cpp_args: ['-std=c++17'],
+      ),
+      env: lammps_root_env,
+      suite: ['e2e', 'thread'],
+      timeout: 180,
+    )
   endif
 endif
