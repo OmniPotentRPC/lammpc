@@ -959,8 +959,92 @@ static void test_nve_set_positions_folds_far_images_and_keeps_atoms(
   }
 }
 
+static void copy_md_mechanics(LammpcSession *dst, const LammpcSession *src) {
+  dst->md_positions = src->md_positions;
+  dst->md_velocities = src->md_velocities;
+  dst->md_forces = src->md_forces;
+  dst->md_removed_velocities = src->md_removed_velocities;
+  dst->md_constraint_force = src->md_constraint_force;
+}
+
+/*
+ * Zero friction must not draw Langevin noise. A positive-friction continuation
+ * that follows a zero-friction segment therefore matches one that skips the
+ * segment, once the mechanical state is put back and only the stream remains.
+ */
+static void test_zero_friction_leaves_rng_unconsumed(void **state) {
+  (void)state;
+  unsigned char config[16384];
+  const size_t config_size = make_lj_config(config, sizeof(config));
+  const double box9[9] = {20.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0, 20.0};
+  const int z[2] = {29, 29};
+  const double initial_positions[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  unsigned char step[16384];
+  const size_t step_size =
+      make_step(initial_positions, z, 2, box9, step, sizeof(step));
+  const double inverse_sqrt_two = 1.0 / std::sqrt(2.0);
+  const double point[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      0.0002, 0.01, 0.0, 11ULL, LAMMPC_PLANE_CARTESIAN,
+  };
+
+  LammpcSession *prefix =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *plain =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(prefix);
+  assert_non_null(plain);
+  assert_int_equal(lammpc_session_md_initialize(prefix, step, step_size, point,
+                                                normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(plain, step, step_size, point,
+                                                normal, 6, &controls),
+                   0);
+  assert_memory_equal(prefix->md_rng, plain->md_rng, sizeof(prefix->md_rng));
+
+  assert_int_equal(lammpc_session_md_step(prefix, 6), 0);
+  assert_memory_equal(prefix->md_rng, plain->md_rng, sizeof(prefix->md_rng));
+  assert_memory_not_equal(prefix->md_positions.data(),
+                          plain->md_positions.data(),
+                          prefix->md_positions.size() * sizeof(double));
+
+  copy_md_mechanics(prefix, plain);
+  prefix->md_config.friction_per_ps = 10.0;
+  plain->md_config.friction_per_ps = 10.0;
+  assert_int_equal(lammpc_session_md_step(prefix, 8), 0);
+  assert_int_equal(lammpc_session_md_step(plain, 8), 0);
+
+  double prefix_positions[6], plain_positions[6];
+  double prefix_velocities[6], plain_velocities[6];
+  double prefix_forces[6], plain_forces[6];
+  double prefix_removed[6], plain_removed[6];
+  LammpcMdObservation prefix_observation, plain_observation;
+  assert_int_equal(lammpc_session_md_state(
+                       prefix, prefix_positions, prefix_velocities,
+                       prefix_forces, prefix_removed, 6, &prefix_observation),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       plain, plain_positions, plain_velocities, plain_forces,
+                       plain_removed, 6, &plain_observation),
+                   0);
+  assert_memory_equal(prefix_positions, plain_positions,
+                      sizeof(prefix_positions));
+  assert_memory_equal(prefix_velocities, plain_velocities,
+                      sizeof(prefix_velocities));
+  assert_memory_equal(prefix_forces, plain_forces, sizeof(prefix_forces));
+  assert_memory_equal(prefix_removed, plain_removed, sizeof(prefix_removed));
+  assert_memory_equal(&prefix_observation.constraint_force,
+                      &plain_observation.constraint_force, sizeof(double));
+  assert_memory_equal(prefix->md_rng, plain->md_rng, sizeof(prefix->md_rng));
+  lammpc_session_destroy(prefix);
+  lammpc_session_destroy(plain);
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
+      cmocka_unit_test(test_zero_friction_leaves_rng_unconsumed),
       cmocka_unit_test(test_upper_face_precision_orthogonal),
       cmocka_unit_test(test_upper_face_precision_triclinic),
       cmocka_unit_test(test_fold_window_edges_and_rounding),
