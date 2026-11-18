@@ -248,7 +248,8 @@ int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
  * @brief One step on a persistent session: `ForceInput` bytes in,
  * `PotentialResult` bytes out. This is the BOMD force-loop entry point for
  * rgpot callers driving dynamics. Geometry setup fails loudly when LAMMPS
- * creates fewer or more atoms than requested.
+ * creates fewer or more atoms than requested. An empty
+ * `ForceInput.energyUnit` means electronvolt (`eV`).
  */
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,

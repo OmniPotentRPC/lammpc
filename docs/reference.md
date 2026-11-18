@@ -22,7 +22,7 @@ interface.
 `ForceInput.lengthUnit` accepts angstrom, bohr, nanometer, and the aliases
 implemented in `src/lammpc_params.c`. It defaults to angstrom.
 `ForceInput.energyUnit` accepts Hartree, electronvolt, Rydberg, kilojoules per
-mole, and kilocalories per mole. It defaults to electronvolt in the schema.
+mole, and kilocalories per mole. An empty value means electronvolt (`eV`).
 The returned `PotentialResult` uses the requested energy unit. Forces use that
 energy unit divided by the requested length unit. Stress uses that energy unit
 divided by the cube of the requested length unit.
