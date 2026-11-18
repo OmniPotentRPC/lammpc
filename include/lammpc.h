@@ -145,6 +145,24 @@ int lammpc_session_md_initialize(
     const LammpcMdConfig *config);
 
 /**
+ * @brief Replace constrained-MD velocities and restart its random stream.
+ *
+ * The Cartesian velocities are projected onto the configured plane before
+ * returning. The seed controls the next Langevin draw; zero is valid.
+ */
+int lammpc_session_md_set_velocities(
+    LammpcSession *session, const double *velocities_ang_ps,
+    size_t coordinate_count, unsigned long long seed);
+
+/**
+ * @brief Copy per-atom masses in amu from a live session geometry.
+ *
+ * A force evaluation or MD initialization must have created the geometry.
+ */
+int lammpc_session_masses(LammpcSession *session, double *masses_amu,
+                          size_t atom_count);
+
+/**
  * @brief Advance exactly step_count projected BAOAB steps.
  *
  * When a hard-boundary callback is armed, it receives the unwrapped

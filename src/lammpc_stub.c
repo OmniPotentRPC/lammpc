@@ -121,6 +121,24 @@ int lammpc_session_md_initialize(
   return -1;
 }
 
+int lammpc_session_md_set_velocities(
+    LammpcSession *session, const double *velocities_ang_ps,
+    size_t coordinate_count, unsigned long long seed) {
+  (void)session;
+  (void)velocities_ang_ps;
+  (void)coordinate_count;
+  (void)seed;
+  return -1;
+}
+
+int lammpc_session_masses(LammpcSession *session, double *masses_amu,
+                          size_t atom_count) {
+  (void)session;
+  (void)masses_amu;
+  (void)atom_count;
+  return -1;
+}
+
 int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   (void)session;
   (void)step_count;
