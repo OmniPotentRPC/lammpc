@@ -1,0 +1,1 @@
+The precision-create embed test compiles the hard-boundary fix with the embed API, so session destruction can disarm a live callback.

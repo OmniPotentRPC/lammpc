@@ -1,5 +1,6 @@
 #include "lammpc.h"
 #include "lammpc_params.h"
+#include "lammpc_boundary_embed.h"
 
 #include "library.h"
 #include "minimage.h"
@@ -12,6 +13,7 @@
 #include <limits>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 thread_local char g_last_error[512] = "";
@@ -754,6 +756,22 @@ LammpcSession *session_from_config_bytes(const void *config_capnp,
   return session;
 }
 
+struct HardBoundaryHook {
+  LammpcHardBoundaryFn fn = nullptr;
+  void *user = nullptr;
+};
+
+/* Present only while a host callback is armed. Absence is the unset path. */
+std::unordered_map<LammpcSession *, HardBoundaryHook> g_hard_boundary_hooks;
+
+void forget_hard_boundary(LammpcSession *session) {
+  if (!session)
+    return;
+  g_hard_boundary_hooks.erase(session);
+  if (session->lmp)
+    lammpc_embed_boundary_disarm(session->lmp);
+}
+
 extern "C" {
 
 const char *lammpc_last_error(void) { return g_last_error; }
@@ -831,6 +849,7 @@ int lammpc_session_configure(LammpcSession *session, const void *config_capnp,
 void lammpc_session_destroy(LammpcSession *session) {
   if (!session)
     return;
+  forget_hard_boundary(session);
   destroy_instance(session);
   delete session;
 }
@@ -1344,5 +1363,64 @@ const char *lammpc_version(void) { return "lammpc/api"; }
 int lammpc_abi_version(void) { return LAMMPC_ABI_VERSION; }
 int lammpc_available(void) { return 1; }
 void lammpc_finalize(void) {}
+
+int lammpc_session_set_hard_boundary(LammpcSession *session,
+                                     LammpcHardBoundaryFn fn, void *user) {
+  if (!session) {
+    store_error("hard boundary requires a session");
+    return -1;
+  }
+  if (!fn) {
+    g_hard_boundary_hooks.erase(session);
+    if (session->lmp && lammpc_embed_boundary_detach(session->lmp) != 0) {
+      store_error(lammpc_embed_boundary_error());
+      return -1;
+    }
+    clear_error();
+    return 0;
+  }
+  g_hard_boundary_hooks[session] = HardBoundaryHook{fn, user};
+  clear_error();
+  return 0;
+}
+
+int lammpc_session_clear_hard_boundary(LammpcSession *session) {
+  return lammpc_session_set_hard_boundary(session, nullptr, nullptr);
+}
+
+int lammpc_session_integrate(LammpcSession *session, int nsteps) {
+  if (!session || nsteps < 0) {
+    store_error("integrate needs a session and a non-negative step count");
+    return -1;
+  }
+  if (!session->lmp) {
+    store_error("integrate needs a live LAMMPS instance");
+    return -1;
+  }
+
+  /* Unset: run the steps the host already configured. No fix, no snapshot. */
+  auto hook = g_hard_boundary_hooks.find(session);
+  const int armed = hook != g_hard_boundary_hooks.end();
+  if (armed && lammpc_embed_boundary_attach(session->lmp, hook->second.fn,
+                                            hook->second.user) != 0) {
+    store_error(lammpc_embed_boundary_error());
+    return -1;
+  }
+
+  char command[64];
+  std::snprintf(command, sizeof(command), "run %d", nsteps);
+  const int ran = run_cmd(session->lmp, command);
+  if (armed) {
+    const int detached = lammpc_embed_boundary_detach(session->lmp);
+    if (ran == 0 && detached != 0) {
+      store_error(lammpc_embed_boundary_error());
+      return -1;
+    }
+  }
+  if (ran != 0)
+    return -1;
+  clear_error();
+  return 0;
+}
 
 } // extern "C"

@@ -50,9 +50,11 @@ lammpc_params_sources = ['src/lammpc_params.c', potentials_capnp_c_src]
 lammpc_params_deps = [capnp_c_dep, potentials_capnp_c_dep]
 lammpc_params_includes = [include_directories('schema')]
 
+lammpc_boundary_sources = ['src/lammpc_boundary.c']
+
 lammpc_stub = static_library(
   'lammpc_stub',
-  ['src/lammpc_stub.c', 'src/lammpc_features.c'],
+  ['src/lammpc_stub.c', 'src/lammpc_features.c'] + lammpc_boundary_sources,
   include_directories: inc,
   c_args: common_c_args,
   install: false,
@@ -96,6 +98,20 @@ else
   lammpc_backend_cpp_args = []
 endif
 
+# Registered on the live instance from the embed. Kept out of the stub.
+# White-box embed tests #include lammpc_embed_api.cpp instead of linking
+# liblammpc.so, so they must compile the other objects that file calls.
+# lammpc_embed_boundary_disarm lives in the fix, and the fix calls
+# lammpc_hard_boundary_apply. The LJ and run0 embed binaries link the
+# shared library, which already contains both objects.
+lammpc_embed_companion_sources = []
+if with_lammps
+  lammpc_backend_sources += ['src/lammpc_fix_boundary.cpp']
+  lammpc_embed_companion_sources = [
+    'src/lammpc_fix_boundary.cpp',
+  ] + lammpc_boundary_sources
+endif
+
 # Shared library exporting the full profile for dlopen consumers (rgpot
 # ProfileLoader). The stub flavour answers capabilities with
 # available = false; the embed flavour calls liblammps directly.
@@ -103,7 +119,7 @@ lammpc_shared = shared_library(
   'lammpc',
   lammpc_backend_sources +
   ['src/lammpc_features.c', 'src/lammpc_capabilities.c'] +
-  lammpc_params_sources,
+  lammpc_params_sources + lammpc_boundary_sources,
   include_directories: [inc] + lammpc_params_includes,
   dependencies: lammpc_params_deps + lammpc_backend_deps,
   c_args: common_c_args,
@@ -117,7 +133,11 @@ lammpc_shared_dep = declare_dependency(
   include_directories: inc,
 )
 
-install_headers('include/lammpc.h', 'include/lammpc_features.h')
+install_headers(
+  'include/lammpc.h',
+  'include/lammpc_features.h',
+  'include/lammpc_boundary.h',
+)
 
 if get_option('with_tests')
   test(
@@ -142,6 +162,17 @@ if get_option('with_tests')
       c_args: common_c_args,
     ),
     suite: ['stub', 'abi'],
+  )
+  test(
+    'hard-boundary',
+    executable(
+      'test_hard_boundary',
+      'tests/test_hard_boundary.c',
+      dependencies: [lammpc_stub_dep, cmocka_dep],
+      include_directories: inc,
+      c_args: common_c_args,
+    ),
+    suite: ['stub'],
   )
   test(
     'params-roundtrip-cmocka',
@@ -186,7 +217,8 @@ if get_option('with_tests')
       'embed-precision-create-e2e',
       executable(
         'test_embed_precision_create_e2e',
-        ['tests/test_embed_precision_create_e2e.cpp'] + lammpc_params_sources,
+        ['tests/test_embed_precision_create_e2e.cpp'] + lammpc_params_sources +
+        lammpc_embed_companion_sources,
         dependencies: [cmocka_dep] + lammpc_params_deps + lammpc_backend_deps,
         include_directories: [inc] + lammpc_params_includes,
         c_args: common_c_args,
