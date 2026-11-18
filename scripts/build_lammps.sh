@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 # Fetch and build a serial shared liblammps into .lammps-install, keeping the
 # source headers (include-src = src/) that the direct-internals embed
-# compiles against. CI caches the whole install dir keyed on LAMMPS_TAG.
+# compiles against. This file is the only copy of the release tag. CI reads
+# it with --print-tag, exports LAMMPS_TAG, and uses that same value as the
+# cache key.
 set -euo pipefail
 
-LAMMPS_TAG="${LAMMPS_TAG:-stable_22Jul2025_update2}"
+# Source of truth for the liblammps release.
+DEFAULT_LAMMPS_TAG=stable_22Jul2025_update2
+LAMMPS_TAG="${LAMMPS_TAG:-${DEFAULT_LAMMPS_TAG}}"
+
+if [ "${1:-}" = "--print-tag" ]; then
+  printf '%s\n' "${LAMMPS_TAG}"
+  exit 0
+fi
+
 PREFIX="${PWD}/.lammps-install"
 
 if [ -f "${PREFIX}/.built-${LAMMPS_TAG}" ]; then
