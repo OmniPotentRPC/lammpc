@@ -1,0 +1,2 @@
+An explicit empty `ForceInput.energyUnit` now follows the schema default and
+is treated as `eV` rather than Hartree units.

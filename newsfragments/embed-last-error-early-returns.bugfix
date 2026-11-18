@@ -1,0 +1,4 @@
+Early return paths in `session_from_config_bytes`,
+`lammpc_session_set_params`, and `lammpc_session_configure` now call
+`store_error`, so `lammpc_last_error()` always reports the current failure
+instead of a stale message.

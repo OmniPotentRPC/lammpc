@@ -918,6 +918,38 @@ static void test_md_reflect_reprojects_and_reevaluates(void **state) {
   lammpc_session_destroy(reflected);
 }
 
+static void test_early_returns_refresh_last_error(void **state) {
+  (void)state;
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "global params are not supported"));
+
+  assert_null(lammpc_session_create_from_config(NULL, 0));
+  assert_non_null(strstr(lammpc_last_error(),
+                         "PotentialConfig bytes are required"));
+  assert_null(strstr(lammpc_last_error(),
+                     "global params are not supported"));
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "global params are not supported"));
+  assert_int_not_equal(lammpc_session_set_params(NULL, NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "session_set_params requires a session"));
+  assert_null(strstr(lammpc_last_error(),
+                     "global params are not supported"));
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "global params are not supported"));
+  assert_int_not_equal(lammpc_session_configure(NULL, NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "session_configure requires a session"));
+  assert_null(strstr(lammpc_last_error(),
+                     "global params are not supported"));
+}
+
 static void test_overlay_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -974,6 +1006,7 @@ int main(void) {
       cmocka_unit_test(test_md_reject_restores_pre_step_force_state),
       cmocka_unit_test(test_md_invalid_decision_restores_pre_step_state),
       cmocka_unit_test(test_md_reflect_reprojects_and_reevaluates),
+      cmocka_unit_test(test_early_returns_refresh_last_error),
       cmocka_unit_test(test_overlay_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

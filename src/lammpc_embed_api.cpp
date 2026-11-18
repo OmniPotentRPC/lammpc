@@ -831,8 +831,10 @@ LammpcSession *session_from_config_bytes(const void *config_capnp,
                                          size_t config_capnp_size_bytes) {
   struct capn arena;
   capn_ptr root;
-  if (!config_capnp || config_capnp_size_bytes == 0)
+  if (!config_capnp || config_capnp_size_bytes == 0) {
+    store_error("PotentialConfig bytes are required");
     return nullptr;
+  }
   memset(&arena, 0, sizeof(arena));
   if (capn_init_mem(&arena, (const uint8_t *)config_capnp,
                     config_capnp_size_bytes, 0) != 0) {
@@ -905,8 +907,10 @@ LammpcSession *lammpc_session_create(const void *params_capnp,
 
 int lammpc_session_set_params(LammpcSession *session, const void *params_capnp,
                               size_t params_capnp_size_bytes) {
-  if (!session)
+  if (!session) {
+    store_error("session_set_params requires a session");
     return -1;
+  }
   struct capn arena;
   LammpsParams_ptr params;
   if (lammpc_params_root(params_capnp, params_capnp_size_bytes, &arena,
@@ -932,8 +936,10 @@ LammpcSession *lammpc_session_create_from_config(const void *config_capnp,
 
 int lammpc_session_configure(LammpcSession *session, const void *config_capnp,
                              size_t config_capnp_size_bytes) {
-  if (!session)
+  if (!session) {
+    store_error("session_configure requires a session");
     return -1;
+  }
   LammpcSession *fresh =
       session_from_config_bytes(config_capnp, config_capnp_size_bytes);
   if (!fresh)

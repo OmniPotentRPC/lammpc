@@ -6,3 +6,4 @@ build*/
 subprojects/packagecache/
 subprojects/minimage-*/
 subprojects/potentials-schema-*/
+subprojects/.wraplock
