@@ -20,8 +20,10 @@ This command configures Meson in `build`, compiles `liblammpc.so`, and runs
 the C test suite. The installed header set consists of `lammpc.h`,
 `lammpc_boundary.h`, and `lammpc_features.h`.
 
-The `public-api-example` test builds and runs `examples/inspect.c`. Run it
-directly after the build with:
+The `public-api-example` test builds and runs `examples/inspect.c`.
+The `docs-api-snippets` test compiles and runs the C snippets shown in this
+documentation so API names and argument order stay in sync with the headers.
+Run the inspect example directly after the build with:
 
 ```sh
 LD_LIBRARY_PATH=build build/public_api_example

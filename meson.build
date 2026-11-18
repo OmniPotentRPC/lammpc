@@ -152,6 +152,17 @@ if get_option('with_tests')
     suite: ['stub', 'docs'],
   )
   test(
+    'docs-api-snippets',
+    executable(
+      'test_docs_api_snippets',
+      'tests/test_docs_api_snippets.c',
+      dependencies: lammpc_shared_dep,
+      include_directories: inc,
+      c_args: common_c_args,
+    ),
+    suite: ['stub', 'docs'],
+  )
+  test(
     'stub-abi',
     executable(
       'test_stub_abi',
