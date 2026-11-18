@@ -19,6 +19,7 @@
  * floating values. Atom creation is a full-precision batched
  * `lammps_create_atoms` path with a hard atom-count consistency check.
  */
+/** Numeric ABI generation used by this header and shared library. */
 #define LAMMPC_ABI_VERSION 0
 
 #ifdef __cplusplus
@@ -50,11 +51,11 @@ typedef enum LammpcPlaneCoordinates {
  * friction_per_ps in ps^-1. A zero seed is valid and deterministic.
  */
 typedef struct LammpcMdConfig {
-  double time_step_ps;
-  double thermal_energy_ev;
-  double friction_per_ps;
-  unsigned long long seed;
-  LammpcPlaneCoordinates coordinates;
+  double time_step_ps;       /**< Finite positive time step in ps. */
+  double thermal_energy_ev;  /**< Finite positive thermal energy in eV. */
+  double friction_per_ps;    /**< Finite positive friction in ps^-1. */
+  unsigned long long seed;   /**< Deterministic RNG seed. Zero is valid. */
+  LammpcPlaneCoordinates coordinates; /**< Plane coordinate convention. */
 } LammpcMdConfig;
 
 /** @brief Scalar accounting for the current constrained MD state. */
@@ -75,8 +76,8 @@ typedef struct LammpcMdObservation {
  * after the most recent NVE propagation.
  */
 typedef struct LammpcNveObservation {
-  double potential_energy_ev;
-  double kinetic_energy_ev;
+  double potential_energy_ev; /**< Potential energy in eV. */
+  double kinetic_energy_ev;   /**< Kinetic energy in eV. */
 } LammpcNveObservation;
 
 /**
@@ -98,15 +99,33 @@ int lammpc_set_params(const void *params_capnp,
 int lammpc_configure(const void *config_capnp,
                      size_t config_capnp_size_bytes);
 
+/**
+ * @brief Legacy raw-array gradient entry point.
+ *
+ * Positions use angstroms and gradients use Hartree/Bohr. The current embed
+ * requires a session and returns `ok = 0`; use
+ * `lammpc_session_calculate_result()` instead.
+ */
 LammpcResult lammpc_energy_gradient(int n_atoms, const double *positions_ang,
                                     const int *atomic_numbers,
                                     const void *cell_ang, size_t cell_len,
                                     double *gradient_h_bohr);
 
+/**
+ * @brief Legacy raw-array energy entry point.
+ *
+ * The current embed returns `ok = 0`; use a session evaluation instead.
+ */
 LammpcResult lammpc_energy(int n_atoms, const double *positions_ang,
                            const int *atomic_numbers, const void *cell_ang,
                            size_t cell_len);
 
+/**
+ * @brief Legacy raw-array force entry point.
+ *
+ * Positions use angstroms and forces use Hartree/Bohr. The current embed
+ * returns `ok = 0`; use a session evaluation instead.
+ */
 LammpcResult lammpc_energy_forces(int n_atoms, const double *positions_ang,
                                   const int *atomic_numbers,
                                   const void *cell_ang, size_t cell_len,
@@ -116,6 +135,12 @@ LammpcResult lammpc_energy_forces(int n_atoms, const double *positions_ang,
 LammpcSession *lammpc_session_create(const void *params_capnp,
                                      size_t params_capnp_size_bytes);
 
+/**
+ * @brief Replace session parameters and discard any live geometry.
+ *
+ * @return 0 on success or -1 for a null session, invalid message, unsupported
+ * units or atom style, or missing required fields.
+ */
 int lammpc_session_set_params(LammpcSession *session, const void *params_capnp,
                               size_t params_capnp_size_bytes);
 
@@ -124,9 +149,15 @@ int lammpc_session_set_params(LammpcSession *session, const void *params_capnp,
 LammpcSession *lammpc_session_create_from_config(
     const void *config_capnp, size_t config_capnp_size_bytes);
 
+/**
+ * @brief Replace session configuration and discard any live geometry.
+ *
+ * @return 0 on success or -1 when the session or configuration is invalid.
+ */
 int lammpc_session_configure(LammpcSession *session, const void *config_capnp,
                              size_t config_capnp_size_bytes);
 
+/** @brief Release a session and its LAMMPS instance. NULL is accepted. */
 void lammpc_session_destroy(LammpcSession *session);
 
 /**

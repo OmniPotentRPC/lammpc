@@ -44,13 +44,13 @@ typedef enum LammpcBoundaryDecision {
  * `triclinic` is 0). `periodic` is 1 on each axis LAMMPS treats as periodic.
  */
 typedef struct LammpcBoundaryBox {
-  double lo[3];
-  double hi[3];
-  double xy;
-  double xz;
-  double yz;
-  int periodic[3];
-  int triclinic;
+  double lo[3];     /**< Lower orthogonal bounds in angstroms. */
+  double hi[3];     /**< Upper orthogonal bounds in angstroms. */
+  double xy;        /**< Restricted-triclinic xy tilt in angstroms. */
+  double xz;        /**< Restricted-triclinic xz tilt in angstroms. */
+  double yz;        /**< Restricted-triclinic yz tilt in angstroms. */
+  int periodic[3];  /**< Nonzero for each periodic axis. */
+  int triclinic;    /**< Nonzero when tilt factors describe the box. */
 } LammpcBoundaryBox;
 
 /**
