@@ -1218,7 +1218,14 @@ int lammpc_session_nve_set_positions(LammpcSession *session,
     session->has_cell = 1;
     std::memcpy(session->cell_ang, cell_ang, sizeof(session->cell_ang));
   }
-  lammps_scatter_atoms(session->lmp, "x", 1, 3, (void *)positions_ang);
+  if (session->has_cell) {
+    std::vector<double> folded = fold_far_images(
+        session->params.boundary, session->cell_ang, session->n_atoms,
+        positions_ang);
+    lammps_scatter_atoms(session->lmp, "x", 1, 3, folded.data());
+  } else {
+    lammps_scatter_atoms(session->lmp, "x", 1, 3, (void *)positions_ang);
+  }
   if (lammps_has_error(session->lmp)) {
     char buffer[512] = {0};
     if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) > 0)
