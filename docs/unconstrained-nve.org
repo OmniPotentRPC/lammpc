@@ -39,7 +39,10 @@ in =lammpc_last_error()=.
 
 =lammpc_session_nve_set_positions= accepts an optional box. If a box is
 provided, it must carry exactly 9 entries and satisfy restricted-triclinic
-constraints compatible with LAMMPS box updates.
+constraints compatible with LAMMPS box updates. When a cell is active, far
+periodic images are folded through the full lattice (=h_inv=) along periodic
+axes before positions are scattered into LAMMPS, leaving non-periodic axes
+untouched.
 
 * Non-goals
 
