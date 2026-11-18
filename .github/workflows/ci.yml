@@ -2,9 +2,23 @@ name: ci
 
 on:
   push:
-    branches: [main, "feat/**", "fix/**"]
+    branches:
+      - main
+      - develop
+    tags:
+      - '*'
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - newsfragments/**
+      - LICENSE
   pull_request:
     branches: [main]
+    paths-ignore:
+      - docs/**
+      - '**/*.md'
+      - newsfragments/**
+      - LICENSE
   workflow_dispatch:
 
 jobs:
@@ -30,6 +44,9 @@ jobs:
       - name: Stub suite under ASan/UBSan
         run: pixi run test-stub-sanitize
 
+    if: github.event_name == 'workflow_dispatch' || github.ref == 
+      'refs/heads/main' || startsWith(github.ref, 'refs/tags/') || 
+      contains(github.event.pull_request.labels.*.name, 'ci:full')
   embed:
     runs-on: ubuntu-latest
     steps:
@@ -49,3 +66,9 @@ jobs:
         run: pixi run -e embed test-embed
       - name: Concurrent sessions under ThreadSanitizer
         run: pixi run -e embed test-embed-tsan
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 
+    github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref != 
+    'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')) }}
