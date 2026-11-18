@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
+#define LAMMPC_EMBED_HAS_FOLD_FAR_IMAGES 1
+
 thread_local char g_last_error[512] = "";
 
 void store_error(const std::string &message) {
@@ -168,9 +170,67 @@ bool boundary_is_fully_periodic(const std::string &boundary) {
   if (!(tokens >> bx >> by >> bz))
     return false;
   auto is_periodic = [](const std::string &token) {
-    return !token.empty() && (token[0] == 'p' || token[0] == 'P');
+    return !token.empty() && token[0] == 'p';
   };
   return is_periodic(bx) && is_periodic(by) && is_periodic(bz);
+}
+
+/* Keep [0,1) bit-identical, but fold periodic axes to a safer inner window
+ * before scattering. The h_inv evaluation mirrors Domain::x2lamda, so atoms
+ * on/near the -1 and +2 faces are folded by whole lattice vectors instead of
+ * relying on Domain::pbc()'s single-period remap. */
+std::vector<double> fold_far_images(const std::string &boundary,
+                                    const double *cell_ang, size_t n_atoms,
+                                    const double *positions_ang) {
+  std::vector<double> folded(positions_ang, positions_ang + n_atoms * 3u);
+
+  std::istringstream tokens(boundary);
+  std::string flag[3];
+  tokens >> flag[0] >> flag[1] >> flag[2];
+  const bool periodic[3] = {
+      !flag[0].empty() && flag[0][0] == 'p',
+      !flag[1].empty() && flag[1][0] == 'p',
+      !flag[2].empty() && flag[2][0] == 'p',
+  };
+
+  const double xprd = cell_ang[0];
+  const double yprd = cell_ang[4];
+  const double zprd = cell_ang[8];
+  const double xy = cell_ang[3];
+  const double xz = cell_ang[6];
+  const double yz = cell_ang[7];
+  const double h_inv[6] = {
+      1.0 / xprd,
+      1.0 / yprd,
+      1.0 / zprd,
+      -yz / (yprd * zprd),
+      (yz * xy - yprd * xz) / (xprd * yprd * zprd),
+      -xy / (xprd * yprd),
+  };
+  const double lattice[3][3] = {{xprd, 0.0, 0.0}, {xy, yprd, 0.0}, {xz, yz, zprd}};
+  constexpr double kLowerWindow = -0.5;
+  constexpr double kUpperWindow = 1.5;
+
+  for (size_t i = 0; i < n_atoms; ++i) {
+    double *r = &folded[3 * i];
+    const double lamda[3] = {
+        h_inv[0] * r[0] + h_inv[5] * r[1] + h_inv[4] * r[2],
+        h_inv[1] * r[1] + h_inv[3] * r[2],
+        h_inv[2] * r[2],
+    };
+    double shift[3] = {0.0, 0.0, 0.0};
+    for (int d = 0; d < 3; ++d) {
+      if (periodic[d] && (lamda[d] < kLowerWindow || lamda[d] >= kUpperWindow))
+        shift[d] = std::floor(lamda[d]);
+    }
+    if (shift[0] == 0.0 && shift[1] == 0.0 && shift[2] == 0.0)
+      continue;
+    for (int k = 0; k < 3; ++k) {
+      r[k] -= shift[0] * lattice[0][k] + shift[1] * lattice[1][k] +
+              shift[2] * lattice[2][k];
+    }
+  }
+  return folded;
 }
 
 int type_for_atomic_number(const DecodedParams &params, int z) {
@@ -378,6 +438,10 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       }
     }
   }
+  if (n_atoms > 0 && has_cell && !boundary_is_fully_periodic(p.boundary)) {
+    creation_positions = fold_far_images(p.boundary, cell_ang, n_atoms,
+                                         creation_positions.data());
+  }
 
 #if defined(LAMMPS_BIGBIG)
   std::vector<int64_t> image_flags(
@@ -473,7 +537,13 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
     store_error("no live LAMMPS session");
     return -1;
   }
-  lammps_scatter_atoms(session->lmp, "x", 1, 3, (void *)positions_ang);
+  if (session->has_cell) {
+    std::vector<double> folded = fold_far_images(
+        session->params.boundary, session->cell_ang, n_atoms, positions_ang);
+    lammps_scatter_atoms(session->lmp, "x", 1, 3, folded.data());
+  } else {
+    lammps_scatter_atoms(session->lmp, "x", 1, 3, (void *)positions_ang);
+  }
   if (run_cmd(session->lmp, "run 0 pre yes post no") != 0)
     return -1;
 
