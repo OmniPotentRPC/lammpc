@@ -1,1 +1,3 @@
-The hard-boundary callback now runs once after each completed constrained-MD step.
+The hard-boundary callback now runs once after each completed constrained-MD
+step; rejected steps restore force bookkeeping and reflected steps are
+re-projected and force-re-evaluated.

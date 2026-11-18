@@ -35,6 +35,15 @@ typedef struct MdBoundaryCounts {
   int valid;
 } MdBoundaryCounts;
 
+typedef struct MdRejectBoundary {
+  int calls;
+} MdRejectBoundary;
+
+typedef struct MdShiftBoundary {
+  int calls;
+  double shift;
+} MdShiftBoundary;
+
 static int reflect_md_boundary(void *user, int n_atoms, double *positions,
                                double *velocities,
                                const LammpcBoundaryBox *box) {
@@ -45,6 +54,31 @@ static int reflect_md_boundary(void *user, int n_atoms, double *positions,
   if (n_atoms != 2 || !(box->hi[0] > box->lo[0]))
     counts->valid = 0;
   counts->reflections += 1;
+  return LAMMPC_BOUNDARY_REFLECT;
+}
+
+static int reject_md_boundary(void *user, int n_atoms, double *positions,
+                              double *velocities,
+                              const LammpcBoundaryBox *box) {
+  MdRejectBoundary *boundary = (MdRejectBoundary *)user;
+  (void)box;
+  boundary->calls += 1;
+  assert_int_equal(n_atoms, 2);
+  positions[0] += 100.0;
+  velocities[0] += 100.0;
+  return LAMMPC_BOUNDARY_REJECT;
+}
+
+static int shift_md_boundary(void *user, int n_atoms, double *positions,
+                             double *velocities,
+                             const LammpcBoundaryBox *box) {
+  MdShiftBoundary *boundary = (MdShiftBoundary *)user;
+  (void)velocities;
+  (void)box;
+  boundary->calls += 1;
+  assert_int_equal(n_atoms, 2);
+  positions[0] -= boundary->shift;
+  positions[3] += boundary->shift;
   return LAMMPC_BOUNDARY_REFLECT;
 }
 
@@ -93,18 +127,16 @@ static size_t make_config(unsigned char *dst, size_t dst_size) {
   return written;
 }
 
-static size_t make_step(double separation_ang, unsigned char *dst,
-                        size_t dst_size) {
+static size_t make_step_positions(const double coordinates[6],
+                                  unsigned char *dst, size_t dst_size) {
   struct capn arena;
   capn_init_malloc(&arena);
   struct capn_segment *seg = capn_root(&arena).seg;
 
   ForceInput_ptr input = new_ForceInput(seg);
   capn_list64 pos = capn_new_list64(seg, 6);
-  const double coords[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
   for (int i = 0; i < 6; ++i)
-    capn_set64(pos, i, capn_from_f64(coords[i]));
-  capn_set64(pos, 3, capn_from_f64(separation_ang));
+    capn_set64(pos, i, capn_from_f64(coordinates[i]));
   capn_list32 atmnrs = capn_new_list32(seg, 2);
   capn_set32(atmnrs, 0, 29);
   capn_set32(atmnrs, 1, 29);
@@ -120,6 +152,13 @@ static size_t make_step(double separation_ang, unsigned char *dst,
   size_t written = write_flat(&arena, input.p, dst, dst_size);
   capn_free(&arena);
   return written;
+}
+
+static size_t make_step(double separation_ang, unsigned char *dst,
+                        size_t dst_size) {
+  const double coordinates[6] = {0.0, 0.0, 0.0,
+                                 separation_ang, 0.0, 0.0};
+  return make_step_positions(coordinates, dst, dst_size);
 }
 
 static void decode_result(const unsigned char *buf, size_t size,
@@ -301,8 +340,156 @@ static void test_md_step_applies_hard_boundary_each_step(void **state) {
   assert_int_equal(counts.reflections, steps);
   assert_int_equal(counts.valid, 1);
   assert_int_equal(observation.steps, (size_t)steps);
-  assert_int_equal(observation.force_evaluations, (size_t)steps + 1u);
+  assert_int_equal(observation.force_evaluations, 2u * (size_t)steps + 1u);
   lammpc_session_destroy(session);
+}
+
+static void test_md_reject_restores_pre_step_force_state(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  unsigned char step[4096];
+  const size_t config_size = make_config(config, sizeof(config));
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 10.0,
+      .seed = 23,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  LammpcSession *rejected =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *reference =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(rejected);
+  assert_non_null(reference);
+  assert_int_equal(lammpc_session_md_initialize(rejected, step, step_size,
+                                                 point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(reference, step, step_size,
+                                                 point, normal, 6, &controls),
+                   0);
+
+  MdRejectBoundary boundary = {.calls = 0};
+  assert_int_equal(lammpc_session_set_hard_boundary(
+                       rejected, reject_md_boundary, &boundary),
+                   0);
+  assert_int_equal(lammpc_session_md_step(rejected, 1), 0);
+
+  double rejected_positions[6], rejected_velocities[6], rejected_forces[6];
+  double rejected_removed[6], reference_positions[6], reference_velocities[6];
+  double reference_forces[6], reference_removed[6];
+  LammpcMdObservation rejected_observation, reference_observation;
+  assert_int_equal(lammpc_session_md_state(
+                       rejected, rejected_positions, rejected_velocities,
+                       rejected_forces, rejected_removed, 6,
+                       &rejected_observation),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       reference, reference_positions, reference_velocities,
+                       reference_forces, reference_removed, 6,
+                       &reference_observation),
+                   0);
+  assert_int_equal(boundary.calls, 1);
+  for (int i = 0; i < 6; ++i) {
+    assert_true(fabs(rejected_positions[i] - reference_positions[i]) < 1e-14);
+    assert_true(fabs(rejected_velocities[i] - reference_velocities[i]) < 1e-14);
+    assert_true(fabs(rejected_forces[i] - reference_forces[i]) < 1e-14);
+    assert_true(fabs(rejected_removed[i] - reference_removed[i]) < 1e-14);
+  }
+  assert_true(fabs(rejected_observation.constraint_force -
+                   reference_observation.constraint_force) < 1e-14);
+  assert_int_equal(rejected_observation.force_evaluations,
+                   reference_observation.force_evaluations + 1u);
+
+  assert_int_equal(lammpc_session_clear_hard_boundary(rejected), 0);
+  assert_int_equal(lammpc_session_md_step(rejected, 1), 0);
+  assert_int_equal(lammpc_session_md_step(reference, 1), 0);
+  assert_int_equal(lammpc_session_md_state(
+                       rejected, rejected_positions, rejected_velocities,
+                       rejected_forces, NULL, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       reference, reference_positions, reference_velocities,
+                       reference_forces, NULL, 6, NULL),
+                   0);
+  for (int i = 0; i < 6; ++i) {
+    assert_true(fabs(rejected_positions[i] - reference_positions[i]) < 1e-14);
+    assert_true(fabs(rejected_velocities[i] - reference_velocities[i]) < 1e-14);
+    assert_true(fabs(rejected_forces[i] - reference_forces[i]) < 1e-14);
+  }
+  lammpc_session_destroy(rejected);
+  lammpc_session_destroy(reference);
+}
+
+static void test_md_reflect_reprojects_and_reevaluates(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  unsigned char step[4096];
+  const size_t config_size = make_config(config, sizeof(config));
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 10.0,
+      .seed = 29,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  LammpcSession *reflected =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(reflected);
+  assert_int_equal(lammpc_session_md_initialize(reflected, step, step_size,
+                                                 point, normal, 6, &controls),
+                   0);
+  MdShiftBoundary boundary = {.calls = 0, .shift = 0.05};
+  assert_int_equal(lammpc_session_set_hard_boundary(
+                       reflected, shift_md_boundary, &boundary),
+                   0);
+  assert_int_equal(lammpc_session_md_step(reflected, 1), 0);
+
+  double positions[6], velocities[6], forces[6];
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_state(reflected, positions, velocities,
+                                           forces, NULL, 6, &observation),
+                   0);
+  double distance = 0.0;
+  double kinetic_energy = 0.0;
+  for (int i = 0; i < 6; ++i) {
+    distance += normal[i] * (positions[i] - point[i]);
+    kinetic_energy += 0.5 * 63.546 * 1.0364269656262175e-4 *
+                      velocities[i] * velocities[i];
+  }
+  assert_int_equal(boundary.calls, 1);
+  assert_true(fabs(distance) < 1e-12);
+  assert_true(isfinite(kinetic_energy) && kinetic_energy >= 0.0);
+  assert_int_equal(observation.force_evaluations, 3);
+
+  unsigned char reflected_step[4096];
+  const size_t reflected_step_size =
+      make_step_positions(positions, reflected_step, sizeof(reflected_step));
+  LammpcSession *fresh =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(fresh);
+  assert_int_equal(lammpc_session_md_initialize(
+                       fresh, reflected_step, reflected_step_size, positions,
+                       normal, 6, &controls),
+                   0);
+  double fresh_forces[6];
+  assert_int_equal(lammpc_session_md_state(fresh, NULL, NULL, fresh_forces,
+                                           NULL, 6, NULL),
+                   0);
+  for (int i = 0; i < 6; ++i)
+    assert_true(fabs(forces[i] - fresh_forces[i]) < 1e-12);
+  lammpc_session_destroy(fresh);
+  lammpc_session_destroy(reflected);
 }
 
 static void test_overlay_rejected(void **state) {
@@ -349,6 +536,8 @@ int main(void) {
       cmocka_unit_test(test_lj_dimer_one_shot_config),
       cmocka_unit_test(test_projected_md_stays_on_plane),
       cmocka_unit_test(test_md_step_applies_hard_boundary_each_step),
+      cmocka_unit_test(test_md_reject_restores_pre_step_force_state),
+      cmocka_unit_test(test_md_reflect_reprojects_and_reevaluates),
       cmocka_unit_test(test_overlay_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

@@ -143,7 +143,13 @@ int lammpc_session_md_initialize(
     const double *normal, size_t coordinate_count,
     const LammpcMdConfig *config);
 
-/** @brief Advance exactly step_count projected BAOAB steps. */
+/**
+ * @brief Advance exactly step_count projected BAOAB steps.
+ *
+ * When a hard-boundary callback is armed, it receives the unwrapped
+ * post-step MD positions once per step. A reflected position is projected
+ * back to the configured plane and its force is re-evaluated.
+ */
 int lammpc_session_md_step(LammpcSession *session, size_t step_count);
 
 /**
@@ -185,7 +191,8 @@ int lammpc_session_nve_set_velocities(LammpcSession *session,
  * @brief Advance unconstrained NVE dynamics with LAMMPS's own integrator.
  *
  * Runs step_count velocity-Verlet steps (`fix nve`) at the given timestep
- * in ps. No projection or position restoration is applied.
+ * in ps. No projection or position restoration is applied. This entry point
+ * ignores a hard-boundary callback armed on the session.
  */
 int lammpc_session_nve_step(LammpcSession *session, size_t step_count,
                             double time_step_ps);

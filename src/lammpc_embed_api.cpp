@@ -720,7 +720,7 @@ int md_apply_hard_boundary(LammpcSession *session,
     store_error("hard boundary callback failed");
     return -1;
   }
-  return 0;
+  return decision;
 }
 
 int reject_common_overlay(CommonMethodSpec_ptr common) {
@@ -1013,8 +1013,22 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   const double decay =
       std::exp(-session->md_config.friction_per_ps * h);
   for (size_t step = 0; step < step_count; ++step) {
-    const std::vector<double> previous_positions = session->md_positions;
-    const std::vector<double> previous_velocities = session->md_velocities;
+    const auto hook = g_hard_boundary_hooks.find(session);
+    const bool hard_boundary_armed = hook != g_hard_boundary_hooks.end();
+    std::vector<double> previous_positions;
+    std::vector<double> previous_velocities;
+    std::vector<double> previous_forces;
+    std::vector<double> previous_removed_velocities;
+    double previous_constraint_force = 0.0;
+    uint64_t previous_rng[4] = {};
+    if (hard_boundary_armed) {
+      previous_positions = session->md_positions;
+      previous_velocities = session->md_velocities;
+      previous_forces = session->md_forces;
+      previous_removed_velocities = session->md_removed_velocities;
+      previous_constraint_force = session->md_constraint_force;
+      std::memcpy(previous_rng, session->md_rng, sizeof(previous_rng));
+    }
     for (size_t i = 0; i < session->md_velocities.size(); ++i)
       session->md_velocities[i] +=
           0.5 * h * session->md_forces[i] /
@@ -1041,9 +1055,24 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
           0.5 * h * session->md_forces[i] /
           (session->md_masses[i] * kMassVelocityToEv);
     md_project_velocity(session);
-    if (md_apply_hard_boundary(session, previous_positions,
-                               previous_velocities) != 0)
-      return -1;
+    if (hard_boundary_armed) {
+      const int decision = md_apply_hard_boundary(
+          session, previous_positions, previous_velocities);
+      if (decision == LAMMPC_BOUNDARY_REJECT || decision < 0) {
+        session->md_forces = std::move(previous_forces);
+        session->md_removed_velocities =
+            std::move(previous_removed_velocities);
+        session->md_constraint_force = previous_constraint_force;
+        std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
+        if (decision < 0)
+          return -1;
+      } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
+        md_restore_position(session);
+        md_project_velocity(session);
+        if (md_evaluate(session) != 0)
+          return -1;
+      }
+    }
     ++session->md_steps;
   }
   clear_error();
