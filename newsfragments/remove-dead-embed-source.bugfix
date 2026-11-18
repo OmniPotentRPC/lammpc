@@ -1,0 +1,2 @@
+The unused legacy source file `src/lammpc_embed.cpp` has been removed since
+the build and tests use `src/lammpc_embed_api.cpp`.
