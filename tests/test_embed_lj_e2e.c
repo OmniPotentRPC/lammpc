@@ -659,6 +659,259 @@ static void test_md_reflect_reprojects_and_reevaluates(void **state) {
   lammpc_session_destroy(reflected);
 }
 
+/* LAMMPS metal mvv2e: amu * (angstrom/ps)^2 -> eV. Matches the embed stepper. */
+static const double kMdMassVelocityToEv = 1.0364269656262175e-4;
+
+static void copy_unit_normal(const double *raw, double *out, size_t count) {
+  double norm2 = 0.0;
+  for (size_t i = 0; i < count; ++i)
+    norm2 += raw[i] * raw[i];
+  const double inverse = 1.0 / sqrt(norm2);
+  for (size_t i = 0; i < count; ++i)
+    out[i] = raw[i] * inverse;
+}
+
+static void expand_atom_masses(const double *per_atom, size_t atom_count,
+                               double *per_coordinate) {
+  for (size_t atom = 0; atom < atom_count; ++atom) {
+    for (int axis = 0; axis < 3; ++axis)
+      per_coordinate[3u * atom + (size_t)axis] = per_atom[atom];
+  }
+}
+
+static void restore_mass_weighted_positions(double *positions,
+                                            const double *point,
+                                            const double *normal,
+                                            const double *masses,
+                                            size_t count) {
+  double distance = 0.0;
+  for (size_t i = 0; i < count; ++i)
+    distance += normal[i] * (sqrt(masses[i]) * positions[i] - point[i]);
+  for (size_t i = 0; i < count; ++i)
+    positions[i] -= normal[i] * distance / sqrt(masses[i]);
+}
+
+static void project_mass_weighted_velocities(double *velocities,
+                                             const double *normal,
+                                             const double *masses,
+                                             size_t count) {
+  double component = 0.0;
+  for (size_t i = 0; i < count; ++i)
+    component += normal[i] * sqrt(masses[i]) * velocities[i];
+  for (size_t i = 0; i < count; ++i)
+    velocities[i] -= normal[i] * component / sqrt(masses[i]);
+}
+
+static void frictionless_half_step(double *positions, double *velocities,
+                                   const double *forces, const double *point,
+                                   const double *normal, const double *masses,
+                                   size_t count, double time_step_ps) {
+  for (size_t i = 0; i < count; ++i)
+    velocities[i] += 0.5 * time_step_ps * forces[i] /
+                     (masses[i] * kMdMassVelocityToEv);
+  for (size_t i = 0; i < count; ++i)
+    positions[i] += 0.5 * time_step_ps * velocities[i];
+  restore_mass_weighted_positions(positions, point, normal, masses, count);
+  project_mass_weighted_velocities(velocities, normal, masses, count);
+  for (size_t i = 0; i < count; ++i)
+    positions[i] += 0.5 * time_step_ps * velocities[i];
+  restore_mass_weighted_positions(positions, point, normal, masses, count);
+}
+
+static void assert_close(const char *label, const double *actual,
+                         const double *expected, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    const double scale = fmax(1.0, fmax(fabs(actual[i]), fabs(expected[i])));
+    if (!(fabs(actual[i] - expected[i]) <= 1e-9 * scale))
+      fail_msg("%s[%zu] actual %.17g expected %.17g", label, i, actual[i],
+               expected[i]);
+  }
+}
+
+static void test_md_negative_friction_is_rejected(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = -1.0,
+      .seed = 5,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   -1);
+  lammpc_session_destroy(session);
+}
+
+static void test_md_set_velocities_drive_frictionless_step(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double raw_normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                                inverse_sqrt_two,  0.0, 0.0};
+  double normal[6];
+  copy_unit_normal(raw_normal, normal, 6);
+  const double time_step_ps = 0.0002;
+  const LammpcMdConfig controls = {
+      .time_step_ps = time_step_ps,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 0.0,
+      .seed = 23,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+
+  double thermal_velocities[6];
+  double initial_positions[6];
+  double initial_forces[6];
+  LammpcMdObservation initialized;
+  assert_int_equal(lammpc_session_md_state(
+                       session, initial_positions, thermal_velocities,
+                       initial_forces, NULL, 6, &initialized),
+                   0);
+  assert_int_equal(initialized.steps, 0);
+  assert_int_equal(initialized.force_evaluations, 1);
+
+  double atom_masses[2];
+  assert_int_equal(lammpc_session_masses(session, atom_masses, 2), 0);
+  assert_true(atom_masses[0] > 0.0);
+  assert_true(atom_masses[1] > 0.0);
+  double masses[6];
+  expand_atom_masses(atom_masses, 2, masses);
+
+  /* Structured Cartesian velocities, including a plane-normal part. They are
+   * not a Maxwell draw: the read-back must show the projected copy, and one
+   * frictionless step must follow these values rather than the initialize
+   * sample shared by a velocity-less replay. */
+  const double supplied[6] = {1.25, 4.0, -3.0, -0.75, -2.0, 1.5};
+  int distinct_from_thermal = 0;
+  for (int i = 0; i < 6; ++i) {
+    if (fabs(supplied[i] - thermal_velocities[i]) > 1.0)
+      distinct_from_thermal = 1;
+  }
+  assert_true(distinct_from_thermal);
+  assert_memory_not_equal(supplied, thermal_velocities, sizeof(supplied));
+
+  double expected_velocities[6];
+  memcpy(expected_velocities, supplied, sizeof(supplied));
+  project_mass_weighted_velocities(expected_velocities, normal, masses, 6);
+  assert_memory_not_equal(expected_velocities, thermal_velocities,
+                          sizeof(expected_velocities));
+
+  assert_int_equal(
+      lammpc_session_md_set_velocities(session, supplied, 6, controls.seed),
+      0);
+
+  double read_positions[6];
+  double read_velocities[6];
+  double read_forces[6];
+  double read_removed[6];
+  LammpcMdObservation before_step;
+  assert_int_equal(lammpc_session_md_state(session, read_positions,
+                                           read_velocities, read_forces,
+                                           read_removed, 6, &before_step),
+                   0);
+  assert_close("velocity readback", read_velocities, expected_velocities, 6);
+  assert_memory_equal(read_positions, initial_positions, sizeof(read_positions));
+  assert_memory_equal(read_forces, initial_forces, sizeof(read_forces));
+  assert_int_equal(before_step.steps, 0);
+  assert_int_equal(before_step.force_evaluations, 1);
+  assert_memory_not_equal(read_velocities, thermal_velocities,
+                          sizeof(read_velocities));
+
+  double held_positions[6];
+  double held_velocities[6];
+  double held_forces[6];
+  double held_removed[6];
+  memcpy(held_positions, read_positions, sizeof(held_positions));
+  memcpy(held_velocities, read_velocities, sizeof(held_velocities));
+  memcpy(held_forces, read_forces, sizeof(held_forces));
+  memcpy(held_removed, read_removed, sizeof(held_removed));
+  assert_int_equal(lammpc_session_md_step(session, 0), 0);
+  double zero_positions[6];
+  double zero_velocities[6];
+  double zero_forces[6];
+  double zero_removed[6];
+  LammpcMdObservation zero_observation;
+  assert_int_equal(lammpc_session_md_state(
+                       session, zero_positions, zero_velocities, zero_forces,
+                       zero_removed, 6, &zero_observation),
+                   0);
+  assert_memory_equal(zero_positions, held_positions, sizeof(zero_positions));
+  assert_memory_equal(zero_velocities, held_velocities, sizeof(zero_velocities));
+  assert_memory_equal(zero_forces, held_forces, sizeof(zero_forces));
+  assert_memory_equal(zero_removed, held_removed, sizeof(zero_removed));
+  assert_int_equal(zero_observation.steps, before_step.steps);
+  assert_int_equal(zero_observation.force_evaluations,
+                   before_step.force_evaluations);
+  assert_memory_equal(&zero_observation.constraint_force,
+                      &before_step.constraint_force, sizeof(double));
+
+  double predicted_positions[6];
+  double predicted_velocities[6];
+  double thermal_positions[6];
+  double thermal_only_velocities[6];
+  memcpy(predicted_positions, read_positions, sizeof(predicted_positions));
+  memcpy(predicted_velocities, read_velocities, sizeof(predicted_velocities));
+  memcpy(thermal_positions, read_positions, sizeof(thermal_positions));
+  memcpy(thermal_only_velocities, thermal_velocities,
+         sizeof(thermal_only_velocities));
+  frictionless_half_step(predicted_positions, predicted_velocities, read_forces,
+                         point, normal, masses, 6, time_step_ps);
+  frictionless_half_step(thermal_positions, thermal_only_velocities,
+                         read_forces, point, normal, masses, 6, time_step_ps);
+  assert_memory_not_equal(predicted_positions, thermal_positions,
+                          sizeof(predicted_positions));
+  assert_memory_not_equal(predicted_positions, read_positions,
+                          sizeof(predicted_positions));
+
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+  double stepped_positions[6];
+  double stepped_velocities[6];
+  double stepped_forces[6];
+  LammpcMdObservation stepped;
+  assert_int_equal(lammpc_session_md_state(
+                       session, stepped_positions, stepped_velocities,
+                       stepped_forces, NULL, 6, &stepped),
+                   0);
+  assert_int_equal(stepped.steps, 1);
+  assert_int_equal(stepped.force_evaluations, 2);
+  assert_close("frictionless positions", stepped_positions, predicted_positions,
+               6);
+
+  for (size_t i = 0; i < 6; ++i)
+    predicted_velocities[i] += 0.5 * time_step_ps * stepped_forces[i] /
+                               (masses[i] * kMdMassVelocityToEv);
+  project_mass_weighted_velocities(predicted_velocities, normal, masses, 6);
+  assert_close("frictionless velocities", stepped_velocities,
+               predicted_velocities, 6);
+  assert_memory_not_equal(stepped_positions, thermal_positions,
+                          sizeof(stepped_positions));
+  lammpc_session_destroy(session);
+}
+
 static void test_overlay_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -703,6 +956,8 @@ int main(void) {
       cmocka_unit_test(test_lj_dimer_one_shot_config),
       cmocka_unit_test(test_projected_md_stays_on_plane),
       cmocka_unit_test(test_md_two_session_replay_is_byte_identical),
+      cmocka_unit_test(test_md_negative_friction_is_rejected),
+      cmocka_unit_test(test_md_set_velocities_drive_frictionless_step),
       cmocka_unit_test(test_md_step_applies_hard_boundary_each_step),
       cmocka_unit_test(test_md_reject_restores_pre_step_force_state),
       cmocka_unit_test(test_md_invalid_decision_restores_pre_step_state),
