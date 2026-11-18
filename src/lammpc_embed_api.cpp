@@ -2,6 +2,8 @@
 #include "lammpc_params.h"
 #include "lammpc_boundary_embed.h"
 
+#include "domain.h"
+#include "lammps.h"
 #include "library.h"
 #include "minimage.h"
 
@@ -13,7 +15,6 @@
 #include <limits>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 thread_local char g_last_error[512] = "";
@@ -110,6 +111,11 @@ constexpr double kBarPerEvA3 = 1602176.6208;
 /* LAMMPS metal-unit conversion: mvv2e * amu * (angstrom/ps)^2 = eV. */
 constexpr double kMassVelocityToEv = 1.0364269656262175e-4;
 
+struct HardBoundaryHook {
+  LammpcHardBoundaryFn fn = nullptr;
+  void *user = nullptr;
+};
+
 struct LammpcSession {
   void *lmp = nullptr;
   DecodedParams params;
@@ -134,6 +140,7 @@ struct LammpcSession {
   std::vector<double> nve_positions;
   std::vector<double> nve_velocities;
   LammpcNveObservation nve_observation = {};
+  HardBoundaryHook hard_boundary;
 };
 
 struct LammpsBounds {
@@ -683,6 +690,36 @@ int nve_sync_state(LammpcSession *session) {
   return 0;
 }
 
+int md_apply_hard_boundary(LammpcSession *session,
+                           const std::vector<double> &previous_positions,
+                           const std::vector<double> &previous_velocities) {
+  const HardBoundaryHook hook = session->hard_boundary;
+  if (!hook.fn)
+    return 0;
+
+  auto *lmp = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp);
+  LammpcBoundaryBox box = {};
+  for (int dim = 0; dim < 3; ++dim) {
+    box.lo[dim] = lmp->domain->boxlo[dim];
+    box.hi[dim] = lmp->domain->boxhi[dim];
+    box.periodic[dim] = lmp->domain->periodicity[dim];
+  }
+  box.xy = lmp->domain->xy;
+  box.xz = lmp->domain->xz;
+  box.yz = lmp->domain->yz;
+  box.triclinic = lmp->domain->triclinic;
+
+  const int decision = lammpc_hard_boundary_apply(
+      hook.fn, hook.user, static_cast<int>(session->n_atoms),
+      session->md_positions.data(), session->md_velocities.data(),
+      previous_positions.data(), previous_velocities.data(), &box);
+  if (decision < 0) {
+    store_error("hard boundary callback failed");
+    return -1;
+  }
+  return decision;
+}
+
 int reject_common_overlay(CommonMethodSpec_ptr common) {
   if (common.p.type == CAPN_NULL)
     return 0;
@@ -756,18 +793,10 @@ LammpcSession *session_from_config_bytes(const void *config_capnp,
   return session;
 }
 
-struct HardBoundaryHook {
-  LammpcHardBoundaryFn fn = nullptr;
-  void *user = nullptr;
-};
-
-/* Present only while a host callback is armed. Absence is the unset path. */
-std::unordered_map<LammpcSession *, HardBoundaryHook> g_hard_boundary_hooks;
-
 void forget_hard_boundary(LammpcSession *session) {
   if (!session)
     return;
-  g_hard_boundary_hooks.erase(session);
+  session->hard_boundary = {};
   if (session->lmp)
     lammpc_embed_boundary_disarm(session->lmp);
 }
@@ -981,6 +1010,21 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   const double decay =
       std::exp(-session->md_config.friction_per_ps * h);
   for (size_t step = 0; step < step_count; ++step) {
+    const bool hard_boundary_armed = session->hard_boundary.fn != nullptr;
+    std::vector<double> previous_positions;
+    std::vector<double> previous_velocities;
+    std::vector<double> previous_forces;
+    std::vector<double> previous_removed_velocities;
+    double previous_constraint_force = 0.0;
+    uint64_t previous_rng[4] = {};
+    if (hard_boundary_armed) {
+      previous_positions = session->md_positions;
+      previous_velocities = session->md_velocities;
+      previous_forces = session->md_forces;
+      previous_removed_velocities = session->md_removed_velocities;
+      previous_constraint_force = session->md_constraint_force;
+      std::memcpy(previous_rng, session->md_rng, sizeof(previous_rng));
+    }
     for (size_t i = 0; i < session->md_velocities.size(); ++i)
       session->md_velocities[i] +=
           0.5 * h * session->md_forces[i] /
@@ -1007,6 +1051,25 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
           0.5 * h * session->md_forces[i] /
           (session->md_masses[i] * kMassVelocityToEv);
     md_project_velocity(session);
+    if (hard_boundary_armed) {
+      const int decision = md_apply_hard_boundary(
+          session, previous_positions, previous_velocities);
+      if (decision == LAMMPC_BOUNDARY_REJECT || decision < 0) {
+        session->md_forces = std::move(previous_forces);
+        session->md_removed_velocities =
+            std::move(previous_removed_velocities);
+        session->md_constraint_force = previous_constraint_force;
+        if (decision < 0) {
+          std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
+          return -1;
+        }
+      } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
+        md_restore_position(session);
+        md_project_velocity(session);
+        if (md_evaluate(session) != 0)
+          return -1;
+      }
+    }
     ++session->md_steps;
   }
   clear_error();
@@ -1371,7 +1434,7 @@ int lammpc_session_set_hard_boundary(LammpcSession *session,
     return -1;
   }
   if (!fn) {
-    g_hard_boundary_hooks.erase(session);
+    session->hard_boundary = {};
     if (session->lmp && lammpc_embed_boundary_detach(session->lmp) != 0) {
       store_error(lammpc_embed_boundary_error());
       return -1;
@@ -1379,7 +1442,7 @@ int lammpc_session_set_hard_boundary(LammpcSession *session,
     clear_error();
     return 0;
   }
-  g_hard_boundary_hooks[session] = HardBoundaryHook{fn, user};
+  session->hard_boundary = HardBoundaryHook{fn, user};
   clear_error();
   return 0;
 }
@@ -1399,10 +1462,10 @@ int lammpc_session_integrate(LammpcSession *session, int nsteps) {
   }
 
   /* Unset: run the steps the host already configured. No fix, no snapshot. */
-  auto hook = g_hard_boundary_hooks.find(session);
-  const int armed = hook != g_hard_boundary_hooks.end();
-  if (armed && lammpc_embed_boundary_attach(session->lmp, hook->second.fn,
-                                            hook->second.user) != 0) {
+  const HardBoundaryHook hook = session->hard_boundary;
+  const int armed = hook.fn != nullptr;
+  if (armed &&
+      lammpc_embed_boundary_attach(session->lmp, hook.fn, hook.user) != 0) {
     store_error(lammpc_embed_boundary_error());
     return -1;
   }

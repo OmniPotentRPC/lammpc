@@ -239,6 +239,28 @@ static void test_reject_restores_previous_state(void **state) {
   assert_memory_equal(vel, previous_vel, sizeof(vel));
 }
 
+static void test_closed_boundary_equality_is_accepted(void **state) {
+  (void)state;
+  SlabUser slab;
+  LammpcBoundaryBox box = slab_box(0.0, 1.0);
+  double previous_pos[3] = {0.75, 0.0, 0.0};
+  double previous_vel[3] = {0.5, 0.0, 0.0};
+  double pos[3] = {1.0, 0.0, 0.0};
+  double vel[3] = {0.5, 0.0, 0.0};
+  const double expected_pos[3] = {1.0, 0.0, 0.0};
+  const double expected_vel[3] = {0.5, 0.0, 0.0};
+  memset(&slab, 0, sizeof(slab));
+
+  assert_int_equal(lammpc_hard_boundary_apply(
+                       slab_callback, &slab, 1, pos, vel, previous_pos,
+                       previous_vel, &box),
+                   LAMMPC_BOUNDARY_ACCEPT);
+  assert_int_equal(slab.accepts, 1);
+  assert_int_equal(slab.reflections, 0);
+  assert_memory_equal(pos, expected_pos, sizeof(pos));
+  assert_memory_equal(vel, expected_vel, sizeof(vel));
+}
+
 static void test_accept_discards_writes_and_reflect_keeps_them(void **state) {
   (void)state;
   LammpcBoundaryBox box = slab_box(0.0, 1.0);
@@ -291,6 +313,7 @@ int main(void) {
       cmocka_unit_test(test_free_particle_reflects_inside_slab),
       cmocka_unit_test(test_harmonic_reflects_inside_slab),
       cmocka_unit_test(test_reject_restores_previous_state),
+      cmocka_unit_test(test_closed_boundary_equality_is_accepted),
       cmocka_unit_test(test_accept_discards_writes_and_reflect_keeps_them),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

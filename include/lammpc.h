@@ -61,9 +61,10 @@ typedef struct LammpcMdConfig {
 typedef struct LammpcMdObservation {
   /** Force along the positive unit normal in the selected coordinates. */
   double constraint_force;
-  /** Number of force evaluations since md_initialize. */
+  /** Force evaluations since md_initialize, including rejected/failed
+   * attempts and reflected-state re-evaluations. */
   size_t force_evaluations;
-  /** Number of completed BAOAB steps. */
+  /** Successful md_step iterations; boundary-rejected iterations count. */
   size_t steps;
 } LammpcMdObservation;
 
@@ -143,7 +144,15 @@ int lammpc_session_md_initialize(
     const double *normal, size_t coordinate_count,
     const LammpcMdConfig *config);
 
-/** @brief Advance exactly step_count projected BAOAB steps. */
+/**
+ * @brief Advance exactly step_count projected BAOAB steps.
+ *
+ * When a hard-boundary callback is armed, it receives the unwrapped
+ * post-step MD positions once per step. A reflected position is projected
+ * back to the configured plane and its force is re-evaluated. A rejected
+ * iteration restores the accepted state but retains the consumed Langevin
+ * draws, and it counts as a successful md_step iteration.
+ */
 int lammpc_session_md_step(LammpcSession *session, size_t step_count);
 
 /**
@@ -185,7 +194,8 @@ int lammpc_session_nve_set_velocities(LammpcSession *session,
  * @brief Advance unconstrained NVE dynamics with LAMMPS's own integrator.
  *
  * Runs step_count velocity-Verlet steps (`fix nve`) at the given timestep
- * in ps. No projection or position restoration is applied.
+ * in ps. No projection or position restoration is applied. This entry point
+ * ignores a hard-boundary callback armed on the session.
  */
 int lammpc_session_nve_step(LammpcSession *session, size_t step_count,
                             double time_step_ps);
@@ -277,10 +287,11 @@ void lammpc_finalize(void);
 /**
  * @brief Arm a host hard-boundary callback on one session.
  *
- * The callback stays dormant until `lammpc_session_integrate()`. Passing
- * a NULL function clears it. Clearing removes the embed fix when the
- * LAMMPS instance is already live, so a later force evaluation does not
- * carry it. The force loop never calls the callback.
+ * The callback stays dormant until `lammpc_session_integrate()` or
+ * `lammpc_session_md_step()` advances the session. Passing a NULL function
+ * clears it. Clearing removes the embed fix when the LAMMPS instance is
+ * already live, so a later force evaluation does not carry it. The force
+ * loop never calls the callback.
  *
  * @return 0 on success, -1 when `session` is NULL or the embed fix cannot
  * be removed.

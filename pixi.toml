@@ -32,3 +32,4 @@ cxx-compiler = ">=1.8.0,<2"
 [feature.embed.tasks]
 build-lammps = { cmd = "bash scripts/build_lammps.sh", description = "Fetch and build serial liblammps into .lammps-install (cached in CI)" }
 test-embed = { cmd = "meson setup build-embed -Dwith_tests=true -Dwith_lammps=true -Dlammps_root=$PWD/.lammps-install && meson compile -C build-embed && meson test -C build-embed --print-errorlogs", description = "Embed suite against real liblammps (LJ analytic E2E)" }
+test-embed-tsan = { cmd = "meson setup build-embed-tsan -Dwith_tests=true -Dwith_lammps=true -Dlammps_root=$PWD/.lammps-install -Db_sanitize=thread -Db_lundef=false && meson compile -C build-embed-tsan && meson test -C build-embed-tsan --suite thread --print-errorlogs", description = "Concurrent session callback test under ThreadSanitizer" }
