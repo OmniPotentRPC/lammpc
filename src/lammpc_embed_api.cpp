@@ -1031,17 +1031,18 @@ int lammpc_session_md_set_velocities(
 int lammpc_session_masses(LammpcSession *session, double *masses_amu,
                           size_t atom_count) {
   if (!session || !masses_amu || atom_count != session->n_atoms ||
-      session->atom_types.size() != atom_count) {
+      session->atom_types.size() != atom_count || !session->lmp) {
     store_error("session mass output has the wrong size");
     return -1;
   }
+  auto *atom_data = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp)->atom;
   for (size_t atom = 0; atom < atom_count; ++atom) {
     const int type = session->atom_types[atom];
-    if (type <= 0 || (size_t)type > session->params.masses.size()) {
+    if (type <= 0 || type > atom_data->ntypes) {
       store_error("session atom type has no mass");
       return -1;
     }
-    const double mass = session->params.masses[(size_t)type - 1u];
+    const double mass = atom_data->mass[type];
     if (!(std::isfinite(mass) && mass > 0.0)) {
       store_error("session mass must be finite and positive");
       return -1;
