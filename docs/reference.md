@@ -55,7 +55,8 @@ message.
 
 Evaluation functions return `LammpcResult`. `ok` is one on success and zero
 on failure. `message` is always null terminated. On success, it contains
-`ok`. On failure, it contains the relevant diagnostic.
+`ok` and the embed clears `lammpc_last_error()`. On failure, `message` and
+`lammpc_last_error()` both carry the diagnostic.
 
 Creation functions return `NULL` on failure. The result size query returns
 zero for an invalid `ForceInput` or an unrepresentable size.

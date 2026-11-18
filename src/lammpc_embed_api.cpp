@@ -28,10 +28,12 @@ void store_error(const std::string &message) {
 void clear_error() { g_last_error[0] = '\0'; }
 
 LammpcResult fail_result(const char *message) {
+  const std::string text = message ? message : "";
+  store_error(text);
   LammpcResult r;
   r.ok = 0;
   r.energy_h = 0.0;
-  std::snprintf(r.message, sizeof(r.message), "%s", message);
+  std::snprintf(r.message, sizeof(r.message), "%s", text.c_str());
   return r;
 }
 
@@ -1420,6 +1422,7 @@ LammpcResult lammpc_session_calculate_result(
                                     potential_result_capnp_size_bytes) != 0)
     return fail_result("PotentialResult write failed");
 
+  clear_error();
   LammpcResult r;
   r.ok = 1;
   r.energy_h = energy_h;

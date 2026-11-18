@@ -303,8 +303,10 @@ int lammpc_capabilities_result(void *capabilities_capnp,
 const char *lammpc_version(void);
 
 /**
- * @brief Thread-local diagnostic for the most recent int-returning
- * configuration call; empty string on success.
+ * @brief Thread local diagnostic for the most recent embed failure.
+ *
+ * Successful embed calls clear this string. The stub keeps a fixed
+ * unavailable message.
  */
 const char *lammpc_last_error(void);
 

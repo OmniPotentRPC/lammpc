@@ -950,6 +950,71 @@ static void test_early_returns_refresh_last_error(void **state) {
                      "global params are not supported"));
 }
 
+static void test_calculate_result_null_refreshes_last_error(void **state) {
+  (void)state;
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "global params are not supported"));
+
+  size_t out_size = 99;
+  LammpcResult result = lammpc_session_calculate_result(NULL, NULL, 0, NULL, 0,
+                                                        &out_size);
+  assert_int_equal(result.ok, 0);
+  assert_non_null(strstr(result.message, "invalid arguments"));
+  assert_non_null(strstr(lammpc_last_error(), "invalid arguments"));
+  assert_null(strstr(lammpc_last_error(), "global params are not supported"));
+  assert_int_equal(out_size, 99);
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  LammpcResult forces = lammpc_energy_forces(0, NULL, NULL, NULL, 0, NULL);
+  assert_int_equal(forces.ok, 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "raw-array calls need a session"));
+  assert_null(strstr(lammpc_last_error(), "global params are not supported"));
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  LammpcResult energy = lammpc_energy(0, NULL, NULL, NULL, 0);
+  assert_int_equal(energy.ok, 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "raw-array calls need a session"));
+
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  LammpcResult gradient = lammpc_energy_gradient(0, NULL, NULL, NULL, 0, NULL);
+  assert_int_equal(gradient.ok, 0);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "raw-array calls need a session"));
+
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  LammpcResult one_shot = lammpc_calculate_result_from_config(
+      config, config_size, NULL, 0, NULL, 0, NULL);
+  assert_int_equal(one_shot.ok, 0);
+  assert_non_null(strstr(one_shot.message, "invalid arguments"));
+  assert_non_null(strstr(lammpc_last_error(), "invalid arguments"));
+  assert_null(strstr(lammpc_last_error(), "global params are not supported"));
+
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  assert_int_not_equal(lammpc_set_params(NULL, 0), 0);
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  unsigned char *out = (unsigned char *)malloc(need);
+  assert_non_null(out);
+  size_t wrote = 0;
+  LammpcResult ok = lammpc_session_calculate_result(session, step, step_size,
+                                                    out, need, &wrote);
+  free(out);
+  lammpc_session_destroy(session);
+  assert_int_equal(ok.ok, 1);
+  assert_string_equal(ok.message, "ok");
+  assert_string_equal(lammpc_last_error(), "");
+}
+
 static void test_overlay_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -1007,6 +1072,7 @@ int main(void) {
       cmocka_unit_test(test_md_invalid_decision_restores_pre_step_state),
       cmocka_unit_test(test_md_reflect_reprojects_and_reevaluates),
       cmocka_unit_test(test_early_returns_refresh_last_error),
+      cmocka_unit_test(test_calculate_result_null_refreshes_last_error),
       cmocka_unit_test(test_overlay_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

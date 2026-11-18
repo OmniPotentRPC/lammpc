@@ -1,0 +1,4 @@
+`lammpc_session_calculate_result`, `lammpc_calculate_result`,
+`lammpc_calculate_result_from_config`, and the raw array helpers now store
+`lammpc_last_error()` on every failure, including a `NULL` argument. A
+successful evaluation clears that string.
