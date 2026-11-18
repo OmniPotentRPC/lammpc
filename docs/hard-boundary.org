@@ -23,14 +23,18 @@ The C callback returns one of three codes:
   back from the pre-step state with =memcpy=. Constrained MD also restores
   its pre-step projected force, constraint force, and removed-velocity
   bookkeeping, but retains the consumed Langevin draws so the next proposal
-  uses fresh noise.
-  In the LAMMPS embed, image flags are restored with them.
+  uses fresh noise. In the LAMMPS embed, image flags are restored with them
+  and forces, energy, and virial data are refreshed at the restored state.
 - =LAMMPC_BOUNDARY_REFLECT= (2). The host has already modified positions
   and velocities in place. Constrained MD restores the position and velocity
-  constraints, then re-evaluates the force at that position.
+  constraints, then re-evaluates the force at that position; if that
+  re-evaluation fails, the entire step rolls back. In the LAMMPS embed,
+  forces, energy, and virial data are refreshed at the reflected state.
 
 Any other code is an error. The pre-step state is restored and the
-apply call returns -1. The embed fix then stops the run.
+apply call returns -1. In the LAMMPS embed, the fix restores the
+pre-step positions, velocities, and image flags and refreshes forces,
+energy, and virial data before stopping the run.
 
 * Callback
 
@@ -124,9 +128,17 @@ mask is end-of-step, after the integrator and LAMMPS periodic
 wrap. While the callback is unset, integrate does not add the fix and
 does not snapshot positions or velocities.
 
-Rejection writes the previous positions, velocities, and image flags.
-Reflection writes the host position and velocity buffers and leaves
-image flags as LAMMPS set them. Acceptance writes nothing.
+Rejection writes the previous positions, velocities, and image flags,
+then refreshes forces, energy, and virial data (=setup_minimal(1)= with
+time-dependent computes re-scheduled on the current step) so thermo and
+compute queries see the restored configuration. Reflection writes the
+host position and velocity buffers, leaves image flags as LAMMPS set
+them, and runs the same force, energy, and virial refresh at the
+reflected configuration. An invalid callback code restores the previous
+positions, velocities, and image flags and refreshes forces, energy, and
+virial data before calling =error->all= to abort the run, so
+=lammpc_session_integrate()= returns -1 with the live LAMMPS state
+matching the restored pre-step configuration. Acceptance writes nothing.
 
 The force loop (=lammpc_session_calculate_result= and =run 0=) does not
 arm the fix. Arming happens only around =lammpc_session_integrate()=.
@@ -140,13 +152,18 @@ not call the host. A null instance is a no-op.
 state instead of installing the LAMMPS fix. When a callback is armed, each
 completed constrained-MD step passes that post-step state and the live LAMMPS
 box to the callback exactly once. Its positions are unwrapped under PBC.
-Reject and an invalid decision restore the complete pre-step constrained
-state, including force bookkeeping. Reject retains the consumed Langevin
-draws so the next proposal is fresh; an invalid decision restores the
-pre-step RNG before returning an error. Reflect keeps the callback's writes,
-re-projects the position and velocity onto the constraint plane, and
-re-evaluates the projected force. Rejected steps count as successful
-=md_step= iterations; invalid decisions do not.
+Each step is transactional on failure: an invalid callback decision or a
+failed force evaluation (either mid-step or after reflection) restores the
+pre-step positions, velocities, projected-force bookkeeping, and Langevin
+RNG before returning -1 without advancing =steps=. If the failed LAMMPS
+evaluation lost atoms so the local atom count no longer matches the session
+geometry, =md_ready= is cleared so a subsequent call cannot advance a
+damaged instance until =lammpc_session_md_initialize()= rebuilds it.
+Reject restores the pre-step constrained state and force bookkeeping while
+retaining the consumed Langevin draws so the next proposal is fresh.
+Reflect keeps the callback's writes, re-projects the position and velocity
+onto the constraint plane, and re-evaluates the projected force. Rejected
+steps count as successful =md_step= iterations; failed steps do not.
 
 =lammpc_session_nve_step()= ignores the hard-boundary callback. It uses its
 own LAMMPS =fix nve= path without adding =lammpc/boundary=.
@@ -171,6 +188,8 @@ build LAMMPS.
 - A step that leaves the slab and is rejected restores both arrays
   with =memcmp=, including values the callback wrote before returning
   reject.
+- Configurations landing on either closed slab face (=lo= or =hi=) are
+  accepted without reflection or rejection.
 - Accept discards in-place writes. Reflect keeps them. An unknown code
   restores the previous state and returns -1.
 - A NULL callback does not dereference its buffers. The stub session
@@ -181,8 +200,10 @@ build LAMMPS.
 =src/lammpc_boundary.c=. =tests/test_embed_precision_create_e2e.cpp=
 includes =src/lammpc_embed_api.cpp= so it can read the live handle, and
 the binary compiles those two companion sources with it. That test
-attaches the fix, checks that one step calls the host, disarms, and
-checks that the next step does not.
+checks force, energy, and virial refresh after reflect, reject, and
+invalid callback decisions, verifies transactional step rollback when a
+reflected =md_step= force evaluation fails, and checks that disarm stops
+later steps from invoking the host.
 =tests/test_embed_lj_e2e.c= also arms a reflecting callback before several
 =lammpc_session_md_step()= calls and checks the callback, reflection, step,
 and force-evaluation counts. Its rejection and reflection cases verify that
