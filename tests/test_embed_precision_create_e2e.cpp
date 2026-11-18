@@ -265,6 +265,18 @@ static int reject_lj_boundary(void *user, int n_atoms, double *positions,
   return LAMMPC_BOUNDARY_REJECT;
 }
 
+static int invalid_lj_boundary(void *user, int n_atoms, double *positions,
+                               double *velocities,
+                               const LammpcBoundaryBox *box) {
+  (void)box;
+  int *calls = static_cast<int *>(user);
+  *calls += 1;
+  assert_int_equal(n_atoms, 2);
+  positions[0] += 100.0;
+  velocities[0] += 100.0;
+  return 99;
+}
+
 static double lj_force(double separation) {
   const double sr6 = pow(2.5 / separation, 6.0);
   return 24.0 * 0.2 * (2.0 * sr6 * sr6 - sr6) / separation;
@@ -392,6 +404,115 @@ static void test_reject_refreshes_lammps_forces(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void test_invalid_callback_refreshes_lammps_forces(void **state) {
+  (void)state;
+  unsigned char config[16384];
+  const size_t config_size = make_lj_config(config, sizeof(config));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double box9[9] = {20.0, 0.0, 0.0, 0.0, 20.0,
+                          0.0,  0.0, 0.0, 20.0};
+  const int z[2] = {29, 29};
+  const double initial_positions[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  LammpcResult result =
+      run_step(session, initial_positions, z, 2, box9);
+  if (!result.ok)
+    fail_msg("LJ invalid-callback setup failed: %s", result.message);
+
+  const double velocities[6] = {-10.0, 0.0, 0.0, 10.0, 0.0, 0.0};
+  assert_int_equal(lammpc_session_nve_set_velocities(session, velocities, 6),
+                   0);
+  if (run_cmd(session->lmp, "timestep 0.01") != 0 ||
+      run_cmd(session->lmp, "fix 1 all nve") != 0 ||
+      run_cmd(session->lmp, "compute test_pe_atom all pe/atom") != 0 ||
+      run_cmd(session->lmp,
+              "compute test_pe_sum all reduce sum c_test_pe_atom") != 0 ||
+      run_cmd(session->lmp,
+              "compute test_stress_atom all stress/atom NULL") != 0 ||
+      run_cmd(session->lmp,
+              "compute test_stress_sum all reduce sum "
+              "c_test_stress_atom[1]") != 0)
+    fail_msg("LJ invalid-callback integrator setup failed: %s",
+             lammpc_last_error());
+
+  int calls = 0;
+  assert_int_equal(
+      lammpc_session_set_hard_boundary(session, invalid_lj_boundary, &calls),
+      0);
+  assert_int_equal(lammpc_session_integrate(session, 5), -1);
+  assert_int_equal(calls, 1);
+  assert_non_null(
+      strstr(lammpc_last_error(), "lammpc hard boundary callback failed"));
+
+  double restored_positions[6] = {};
+  double restored_velocities[6] = {};
+  double restored_forces[6] = {};
+  lammps_gather_atoms(session->lmp, "x", 1, 3, restored_positions);
+  lammps_gather_atoms(session->lmp, "v", 1, 3, restored_velocities);
+  lammps_gather_atoms(session->lmp, "f", 1, 3, restored_forces);
+  assert_memory_equal(restored_positions, initial_positions,
+                      sizeof(restored_positions));
+  assert_memory_equal(restored_velocities, velocities,
+                      sizeof(restored_velocities));
+  const double expected_force = lj_force(3.0);
+  assert_true(fabs(restored_forces[3] - expected_force) <
+              fabs(expected_force) * 1.0e-10);
+  assert_true(fabs(restored_forces[0] + expected_force) <
+              fabs(expected_force) * 1.0e-10);
+
+  const double restored_pe = lammps_get_thermo(session->lmp, "pe");
+  assert_int_equal(lammps_has_error(session->lmp), 0);
+  const double restored_ke = lammps_get_thermo(session->lmp, "ke");
+  assert_int_equal(lammps_has_error(session->lmp), 0);
+  const double restored_pxx = lammps_get_thermo(session->lmp, "pxx");
+  assert_int_equal(lammps_has_error(session->lmp), 0);
+  const double *pe_sum_ptr = static_cast<const double *>(
+      lammps_extract_compute(session->lmp, "test_pe_sum", LMP_STYLE_GLOBAL,
+                             LMP_TYPE_SCALAR));
+  assert_non_null(pe_sum_ptr);
+  const double restored_pe_atom_sum = *pe_sum_ptr;
+  const double *stress_sum_ptr = static_cast<const double *>(
+      lammps_extract_compute(session->lmp, "test_stress_sum", LMP_STYLE_GLOBAL,
+                             LMP_TYPE_SCALAR));
+  assert_non_null(stress_sum_ptr);
+  const double restored_stress_atom_sum = *stress_sum_ptr;
+
+  if (run_cmd(session->lmp, "run 0 pre yes post no") != 0)
+    fail_msg("fresh force evaluation after invalid callback failed: %s",
+             lammpc_last_error());
+  double fresh_forces[6] = {};
+  lammps_gather_atoms(session->lmp, "f", 1, 3, fresh_forces);
+  constexpr double relative_tolerance = 1.0e-12;
+  for (size_t i = 0; i < 6; ++i) {
+    const double scale = std::max(1.0, fabs(fresh_forces[i]));
+    assert_true(fabs(restored_forces[i] - fresh_forces[i]) <=
+                relative_tolerance * scale);
+  }
+  const double fresh_pe = lammps_get_thermo(session->lmp, "pe");
+  const double fresh_ke = lammps_get_thermo(session->lmp, "ke");
+  const double fresh_pxx = lammps_get_thermo(session->lmp, "pxx");
+  const double fresh_pe_atom_sum = *static_cast<const double *>(
+      lammps_extract_compute(session->lmp, "test_pe_sum", LMP_STYLE_GLOBAL,
+                             LMP_TYPE_SCALAR));
+  const double fresh_stress_atom_sum = *static_cast<const double *>(
+      lammps_extract_compute(session->lmp, "test_stress_sum", LMP_STYLE_GLOBAL,
+                             LMP_TYPE_SCALAR));
+  assert_true(fabs(restored_pe - fresh_pe) <=
+              relative_tolerance * std::max(1.0, fabs(fresh_pe)));
+  assert_true(fabs(restored_ke - fresh_ke) <=
+              relative_tolerance * std::max(1.0, fabs(fresh_ke)));
+  assert_true(fabs(restored_pxx - fresh_pxx) <=
+              relative_tolerance * std::max(1.0, fabs(fresh_pxx)));
+  assert_true(fabs(restored_pe_atom_sum - fresh_pe_atom_sum) <=
+              relative_tolerance * std::max(1.0, fabs(fresh_pe_atom_sum)));
+  assert_true(fabs(restored_stress_atom_sum - fresh_stress_atom_sum) <=
+              relative_tolerance *
+                  std::max(1.0, fabs(fresh_stress_atom_sum)));
+  lammpc_session_destroy(session);
+}
+
 /*
  * Destroy drops the host callback before it closes LAMMPS. Attach the
  * fix, prove one step calls the host, disarm, and prove the next step
@@ -439,6 +560,7 @@ int main(void) {
       cmocka_unit_test(test_atom_count_mismatch_fails_loudly),
       cmocka_unit_test(test_reflect_refreshes_lammps_forces),
       cmocka_unit_test(test_reject_refreshes_lammps_forces),
+      cmocka_unit_test(test_invalid_callback_refreshes_lammps_forces),
       cmocka_unit_test(test_destroy_disarms_hard_boundary),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
