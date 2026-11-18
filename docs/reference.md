@@ -48,10 +48,13 @@ an error.
 
 ## Return conventions
 
-Functions returning `int` return zero on success and minus one on failure.
-Read the thread local `lammpc_last_error()` immediately after a failure.
-Successful embed calls clear that string. The stub keeps a fixed unavailable
-message.
+Most functions returning `int` return zero on success and minus one on
+failure. The hard-boundary helper `lammpc_hard_boundary_apply()` returns a
+decision code on success: accept, reject, or reflect.
+
+Read the thread local `lammpc_last_error()` immediately after a failure from an
+`int`-returning API. Successful embed calls clear that string. The stub keeps
+a fixed unavailable message.
 
 Evaluation functions return `LammpcResult`. `ok` is one on success and zero
 on failure. `message` is always null terminated. On success, it contains
@@ -90,7 +93,7 @@ loaded library. Callers must not free or modify them.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_set_params` | Unsupported by the embed because global parameters are disabled. |
+| `lammpc_set_params` | Legacy global entry point. It is unsupported by the embed because global parameters are disabled. |
 | `lammpc_configure` | Validates a `PotentialConfig` by creating and destroying a temporary session. |
 | `lammpc_session_create` | Creates an idle session from `LammpsParams`. |
 | `lammpc_session_create_from_config` | Creates an idle session from the `lammps` arm. |

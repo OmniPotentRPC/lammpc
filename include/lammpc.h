@@ -81,11 +81,11 @@ typedef struct LammpcNveObservation {
 } LammpcNveObservation;
 
 /**
- * @brief Apply sticky interaction-model options from a flat `LammpsParams`
- * message (units/pair_style/pair_coeff/type map).
+ * @brief Legacy global-configuration entry point.
  *
- * @return 0 on success, non-zero if the embed shell is unavailable or the
- * message is invalid; details via `lammpc_last_error()`.
+ * The current ABI uses session-scoped configuration only. This function keeps
+ * its symbol for discovery and always fails with details in
+ * `lammpc_last_error()`.
  */
 int lammpc_set_params(const void *params_capnp,
                       size_t params_capnp_size_bytes);
@@ -303,8 +303,8 @@ int lammpc_capabilities_result(void *capabilities_capnp,
 const char *lammpc_version(void);
 
 /**
- * @brief Thread-local diagnostic for the most recent int-returning
- * configuration call; empty string on success.
+ * @brief Thread-local diagnostic for the most recent int-returning API call;
+ * empty string on success in the embed build.
  */
 const char *lammpc_last_error(void);
 
