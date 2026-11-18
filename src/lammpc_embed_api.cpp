@@ -1063,9 +1063,10 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
         session->md_removed_velocities =
             std::move(previous_removed_velocities);
         session->md_constraint_force = previous_constraint_force;
-        std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
-        if (decision < 0)
+        if (decision < 0) {
+          std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
           return -1;
+        }
       } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
         md_restore_position(session);
         md_project_velocity(session);

@@ -21,8 +21,9 @@ The C callback returns one of three codes:
   integrator state is unchanged.
 - =LAMMPC_BOUNDARY_REJECT= (1). Positions and velocities are copied
   back from the pre-step state with =memcpy=. Constrained MD also restores
-  its pre-step projected force, constraint force, removed-velocity, and RNG
-  state.
+  its pre-step projected force, constraint force, and removed-velocity
+  bookkeeping, but retains the consumed Langevin draws so the next proposal
+  uses fresh noise.
   In the LAMMPS embed, image flags are restored with them.
 - =LAMMPC_BOUNDARY_REFLECT= (2). The host has already modified positions
   and velocities in place. Constrained MD restores the position and velocity
@@ -140,9 +141,12 @@ state instead of installing the LAMMPS fix. When a callback is armed, each
 completed constrained-MD step passes that post-step state and the live LAMMPS
 box to the callback exactly once. Its positions are unwrapped under PBC.
 Reject and an invalid decision restore the complete pre-step constrained
-state, including force bookkeeping and the Langevin RNG. Reflect keeps the callback's writes,
+state, including force bookkeeping. Reject retains the consumed Langevin
+draws so the next proposal is fresh; an invalid decision restores the
+pre-step RNG before returning an error. Reflect keeps the callback's writes,
 re-projects the position and velocity onto the constraint plane, and
-re-evaluates the projected force.
+re-evaluates the projected force. Rejected steps count as successful
+=md_step= iterations; invalid decisions do not.
 
 =lammpc_session_nve_step()= ignores the hard-boundary callback. It uses its
 own LAMMPS =fix nve= path without adding =lammpc/boundary=.

@@ -1,3 +1,4 @@
 The hard-boundary callback now runs once after each completed constrained-MD
 step; rejected steps restore force bookkeeping and reflected steps are
-re-projected and force-re-evaluated.
+re-projected and force-re-evaluated. Rejected Langevin proposals retain their
+consumed random draws so retries use fresh noise.
