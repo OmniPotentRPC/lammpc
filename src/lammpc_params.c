@@ -63,14 +63,14 @@ static int force_input_length_factor(capn_text unit, double *factor) {
 static int force_input_energy_factor(capn_text unit, double *factor) {
   if (!factor)
     return -1;
-  if (!unit.str || unit.len <= 0 || text_eq_ci(unit, "hartree") ||
-      text_eq_ci(unit, "ha") || text_eq_ci(unit, "au") ||
-      text_eq_ci(unit, "a.u.")) {
-    *factor = 1.0;
+  if (!unit.str || unit.len <= 0 || text_eq_ci(unit, "ev") ||
+      text_eq_ci(unit, "electronvolt")) {
+    *factor = LAMMPC_HARTREE_TO_EV;
     return 0;
   }
-  if (text_eq_ci(unit, "ev") || text_eq_ci(unit, "electronvolt")) {
-    *factor = LAMMPC_HARTREE_TO_EV;
+  if (text_eq_ci(unit, "hartree") || text_eq_ci(unit, "ha") ||
+      text_eq_ci(unit, "au") || text_eq_ci(unit, "a.u.")) {
+    *factor = 1.0;
     return 0;
   }
   if (text_eq_ci(unit, "ry") || text_eq_ci(unit, "rydberg")) {

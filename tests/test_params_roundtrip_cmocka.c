@@ -159,11 +159,53 @@ static void test_potential_result_write_and_read(void **state) {
   free(buf);
 }
 
+static void test_force_input_empty_energy_unit_uses_default_ev(void **state) {
+  (void)state;
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  ForceInput_ptr input = new_ForceInput(seg);
+  capn_list64 pos = capn_new_list64(seg, 3);
+  capn_set64(pos, 0, capn_from_f64(0.0));
+  capn_set64(pos, 1, capn_from_f64(0.0));
+  capn_set64(pos, 2, capn_from_f64(0.0));
+  capn_list32 atmnrs = capn_new_list32(seg, 1);
+  capn_set32(atmnrs, 0, 29);
+
+  struct ForceInput view;
+  memset(&view, 0, sizeof(view));
+  view.pos = pos;
+  view.atmnrs = atmnrs;
+  view.lengthUnit = (capn_text){8, "angstrom", NULL};
+  view.energyUnit = (capn_text){0, "", NULL};
+  write_ForceInput(&view, input);
+
+  unsigned char buf[4096];
+  size_t written = write_flat(&arena, input.p, buf, sizeof(buf));
+  capn_free(&arena);
+
+  struct capn parse_arena;
+  ForceInput_ptr parsed;
+  assert_int_equal(lammpc_force_input_root(buf, written, &parse_arena,
+                                           &parsed),
+                   0);
+  double energy_factor = 0.0;
+  double force_factor = 0.0;
+  assert_int_equal(lammpc_force_input_result_factors(parsed, &energy_factor,
+                                                     &force_factor),
+                   0);
+  assert_true(energy_factor > 27.211 && energy_factor < 27.212);
+  assert_true(force_factor > 51.42 && force_factor < 51.43);
+  lammpc_params_release(&parse_arena);
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_force_input_geometry_round_trip),
       cmocka_unit_test(test_lammps_params_decode),
       cmocka_unit_test(test_potential_result_write_and_read),
+      cmocka_unit_test(test_force_input_empty_energy_unit_uses_default_ev),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
