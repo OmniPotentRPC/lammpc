@@ -24,6 +24,7 @@ on:
 
 jobs:
   stub-and-lint:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +36,7 @@ jobs:
         run: pixi run test-stub
 
   sanitize:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,14 +49,13 @@ jobs:
 
   embed:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event.action != 'labeled' ||
+      github.event.label.name == 'ci:full') &&
+      (github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/main' ||
       github.ref == 'refs/heads/develop' ||
       startsWith(github.ref, 'refs/tags/') ||
-      contains(github.event.pull_request.labels.*.name, 'ci:full') ||
-      (github.event_name == 'pull_request' &&
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'ci:full')
+      contains(github.event.pull_request.labels.*.name, 'ci:full'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,6 +84,7 @@ jobs:
         run: pixi run -e embed test-embed
 
   tsan:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -111,7 +113,14 @@ jobs:
         run: pixi run -e embed test-embed-tsan
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 
-    github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.ref != 
-    'refs/heads/main' && !startsWith(github.ref, 'refs/tags/')) }}
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number ||
+    github.ref }}${{ (github.event.action == 'labeled' &&
+    github.event.label.name != 'ci:full') &&
+    format('-noop-{0}', github.run_id) || '' }}
+  cancel-in-progress: >-
+    ${{ (github.event_name == 'pull_request' &&
+    (github.event.action != 'labeled' ||
+    github.event.label.name == 'ci:full')) ||
+    (github.ref != 'refs/heads/main' &&
+    !startsWith(github.ref, 'refs/tags/')) }}
