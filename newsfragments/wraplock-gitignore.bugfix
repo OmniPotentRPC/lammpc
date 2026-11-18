@@ -1,0 +1,2 @@
+The generated `subprojects/.wraplock` file is now ignored by Git to keep
+working trees clean after dependency resolution.
