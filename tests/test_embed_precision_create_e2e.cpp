@@ -10,7 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <array>
 #include <cmath>
+#include <sstream>
+#include <string>
 #include <vector>
 
 /*
@@ -18,6 +21,15 @@
  * the live LAMMPS handle and assert post-create coordinates bit-for-bit.
  */
 #include "../src/lammpc_embed_api.cpp"
+
+#ifndef LAMMPC_EMBED_HAS_FOLD_FAR_IMAGES
+std::vector<double> fold_far_images(const std::string &,
+                                    const double *,
+                                    size_t n_atoms,
+                                    const double *positions_ang) {
+  return std::vector<double>(positions_ang, positions_ang + n_atoms * 3u);
+}
+#endif
 
 extern "C" {
 #include <cmocka.h>
@@ -166,6 +178,89 @@ static LammpcResult run_step(LammpcSession *session, const double *positions_ang
   return r;
 }
 
+static void fractional_to_cart(const double box9[9], const double s[3],
+                               double r[3]) {
+  r[0] = box9[0] * s[0] + box9[3] * s[1] + box9[6] * s[2];
+  r[1] = box9[4] * s[1] + box9[7] * s[2];
+  r[2] = box9[8] * s[2];
+}
+
+static std::vector<double> from_fractional(const double box9[9],
+                                           const std::vector<double> &fractional) {
+  assert_true((fractional.size() % 3u) == 0u);
+  std::vector<double> cart(fractional.size(), 0.0);
+  for (size_t atom = 0; atom < fractional.size() / 3u; ++atom) {
+    const double *s = &fractional[3 * atom];
+    double *r = &cart[3 * atom];
+    fractional_to_cart(box9, s, r);
+  }
+  return cart;
+}
+
+static std::vector<double> expected_fold(const std::string &boundary,
+                                         const double box9[9],
+                                         const std::vector<double> &positions) {
+  std::istringstream tokens(boundary);
+  std::string flag[3];
+  tokens >> flag[0] >> flag[1] >> flag[2];
+  const bool periodic[3] = {
+      !flag[0].empty() && flag[0][0] == 'p',
+      !flag[1].empty() && flag[1][0] == 'p',
+      !flag[2].empty() && flag[2][0] == 'p',
+  };
+
+  const double xprd = box9[0];
+  const double yprd = box9[4];
+  const double zprd = box9[8];
+  const double xy = box9[3];
+  const double xz = box9[6];
+  const double yz = box9[7];
+  const double h_inv[6] = {
+      1.0 / xprd,
+      1.0 / yprd,
+      1.0 / zprd,
+      -yz / (yprd * zprd),
+      (yz * xy - yprd * xz) / (xprd * yprd * zprd),
+      -xy / (xprd * yprd),
+  };
+  const double lattice[3][3] = {
+      {box9[0], 0.0, 0.0},
+      {box9[3], box9[4], 0.0},
+      {box9[6], box9[7], box9[8]},
+  };
+
+  std::vector<double> expected = positions;
+  for (size_t atom = 0; atom < expected.size() / 3u; ++atom) {
+    double *r = &expected[3 * atom];
+    const double lamda[3] = {
+        h_inv[0] * r[0] + h_inv[5] * r[1] + h_inv[4] * r[2],
+        h_inv[1] * r[1] + h_inv[3] * r[2],
+        h_inv[2] * r[2],
+    };
+    double shift[3] = {0.0, 0.0, 0.0};
+    for (int d = 0; d < 3; ++d) {
+      if (periodic[d] && (lamda[d] < -0.5 || lamda[d] >= 1.5))
+        shift[d] = std::floor(lamda[d]);
+    }
+    for (int k = 0; k < 3; ++k) {
+      r[k] -= shift[0] * lattice[0][k] + shift[1] * lattice[1][k] +
+              shift[2] * lattice[2][k];
+    }
+  }
+  return expected;
+}
+
+static void assert_fold_matches_expected(const char *name,
+                                         const std::vector<double> &got,
+                                         const std::vector<double> &expected) {
+  assert_int_equal((int)got.size(), (int)expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    if (std::fabs(got[i] - expected[i]) >= 1e-12)
+      fail_msg("%s mismatch at %zu: got=%.17g expected=%.17g", name, i, got[i],
+               expected[i]);
+  }
+}
+
 static void assert_positions_bit_identical(LammpcSession *session,
                                            const double *expected,
                                            int n_atoms) {
@@ -213,6 +308,66 @@ static void test_upper_face_precision_triclinic(void **state) {
   assert_int_equal((int)llround(lammps_get_natoms(session->lmp)), 2);
   assert_positions_bit_identical(session, pos, 2);
   lammpc_session_destroy(session);
+}
+
+static void test_fold_window_edges_and_rounding(void **state) {
+  (void)state;
+  const double box9[9] = {8.0, 0.0, 0.0, 1.0, 8.0, 0.0, 0.5, 0.25, 8.0};
+  const std::vector<double> fractional = {
+      0.35, 0.4, 0.2,    /* [0,1): bit-identical passthrough */
+      1.25, -0.25, 0.75, /* inner window passthrough (kills fold-all mutant) */
+      1.5, 0.2, 0.3,     /* upper edge folds */
+      -0.5, 0.2, 0.3,    /* lower edge does not fold */
+      1.6, -0.6, 2.25,   /* non-integer shifts, floor-specific */
+  };
+  std::vector<double> positions = from_fractional(box9, fractional);
+  const std::vector<double> original = positions;
+
+  std::vector<double> folded =
+      fold_far_images("p p p", box9, positions.size() / 3u, positions.data());
+  const std::vector<double> expected = expected_fold("p p p", box9, positions);
+  assert_fold_matches_expected("window+rounding fold", folded, expected);
+  assert_memory_equal(positions.data(), original.data(),
+                      positions.size() * sizeof(double));
+  for (int d = 0; d < 3; ++d)
+    assert_memory_equal(&folded[d], &positions[d], sizeof(double));
+  for (int d = 0; d < 3; ++d)
+    assert_memory_equal(&folded[3 + d], &positions[3 + d], sizeof(double));
+}
+
+static void test_fold_triclinic_many_periods(void **state) {
+  (void)state;
+  const double box9[9] = {12.0, 0.0, 0.0, 1.5, 11.5, 0.0, 0.75, 0.5, 11.0};
+  const std::vector<double> fractional = {
+      10.125, -8.75, 5.5,
+      -7.2, 12.3, -9.4,
+  };
+  std::vector<double> positions = from_fractional(box9, fractional);
+  std::vector<double> folded =
+      fold_far_images("p p p", box9, positions.size() / 3u, positions.data());
+  const std::vector<double> expected = expected_fold("p p p", box9, positions);
+  assert_fold_matches_expected("triclinic many-period fold", folded, expected);
+}
+
+static void test_fold_respects_mixed_boundaries(void **state) {
+  (void)state;
+  const double box9[9] = {12.0, 0.0, 0.0, 1.5, 11.5, 0.0, 0.75, 0.5, 11.0};
+  const std::vector<double> fractional = {
+      3.2, -4.6, 5.1,
+      -5.4, 6.8, -7.2,
+  };
+  const std::array<const char *, 3> boundaries = {
+      "p p f",
+      "p f p",
+      "f p p",
+  };
+  for (const char *boundary : boundaries) {
+    std::vector<double> positions = from_fractional(box9, fractional);
+    std::vector<double> folded = fold_far_images(
+        boundary, box9, positions.size() / 3u, positions.data());
+    const std::vector<double> expected = expected_fold(boundary, box9, positions);
+    assert_fold_matches_expected("mixed-boundary fold", folded, expected);
+  }
 }
 
 static void test_atom_count_mismatch_fails_loudly(void **state) {
@@ -436,6 +591,9 @@ int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_upper_face_precision_orthogonal),
       cmocka_unit_test(test_upper_face_precision_triclinic),
+      cmocka_unit_test(test_fold_window_edges_and_rounding),
+      cmocka_unit_test(test_fold_triclinic_many_periods),
+      cmocka_unit_test(test_fold_respects_mixed_boundaries),
       cmocka_unit_test(test_atom_count_mismatch_fails_loudly),
       cmocka_unit_test(test_reflect_refreshes_lammps_forces),
       cmocka_unit_test(test_reject_refreshes_lammps_forces),
