@@ -1504,6 +1504,109 @@ static void test_md_set_velocities_drive_frictionless_step(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void test_md_set_velocities_reseed_under_positive_friction(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 10.0,
+      .seed = 7,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  const double supplied[6] = {1.25, 4.0, -3.0, -0.75, -2.0, 1.5};
+  const unsigned long long same_seed = 42;
+  const unsigned long long other_seed = 99;
+
+  LammpcSession *replay =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *again =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *diverged =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(replay);
+  assert_non_null(again);
+  assert_non_null(diverged);
+  assert_int_equal(lammpc_session_md_initialize(
+                       replay, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(
+                       again, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(
+                       diverged, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(
+      lammpc_session_md_set_velocities(replay, supplied, 6, same_seed), 0);
+  assert_int_equal(
+      lammpc_session_md_set_velocities(again, supplied, 6, same_seed), 0);
+  assert_int_equal(
+      lammpc_session_md_set_velocities(diverged, supplied, 6, other_seed), 0);
+
+  double replay_velocity[6], again_velocity[6], diverged_velocity[6];
+  assert_int_equal(lammpc_session_md_state(replay, NULL, replay_velocity, NULL,
+                                           NULL, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(again, NULL, again_velocity, NULL,
+                                           NULL, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(diverged, NULL, diverged_velocity,
+                                           NULL, NULL, 6, NULL),
+                   0);
+  assert_memory_equal(replay_velocity, again_velocity, sizeof(replay_velocity));
+  assert_memory_equal(replay_velocity, diverged_velocity,
+                      sizeof(replay_velocity));
+
+  assert_int_equal(lammpc_session_md_step(replay, 8), 0);
+  assert_int_equal(lammpc_session_md_step(again, 8), 0);
+  assert_int_equal(lammpc_session_md_step(diverged, 8), 0);
+
+  double replay_positions[6], again_positions[6], diverged_positions[6];
+  double replay_velocities[6], again_velocities[6], diverged_velocities[6];
+  double replay_forces[6], again_forces[6], diverged_forces[6];
+  double replay_removed[6], again_removed[6], diverged_removed[6];
+  LammpcMdObservation replay_observation, again_observation,
+      diverged_observation;
+  assert_int_equal(lammpc_session_md_state(
+                       replay, replay_positions, replay_velocities,
+                       replay_forces, replay_removed, 6, &replay_observation),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       again, again_positions, again_velocities, again_forces,
+                       again_removed, 6, &again_observation),
+                   0);
+  assert_int_equal(
+      lammpc_session_md_state(diverged, diverged_positions, diverged_velocities,
+                              diverged_forces, diverged_removed, 6,
+                              &diverged_observation),
+      0);
+  assert_memory_equal(replay_positions, again_positions,
+                      sizeof(replay_positions));
+  assert_memory_equal(replay_velocities, again_velocities,
+                      sizeof(replay_velocities));
+  assert_memory_equal(replay_forces, again_forces, sizeof(replay_forces));
+  assert_memory_equal(replay_removed, again_removed, sizeof(replay_removed));
+  assert_memory_equal(&replay_observation.constraint_force,
+                      &again_observation.constraint_force, sizeof(double));
+  assert_int_equal(replay_observation.steps, again_observation.steps);
+  assert_int_equal(replay_observation.force_evaluations,
+                   again_observation.force_evaluations);
+  assert_memory_not_equal(replay_positions, diverged_positions,
+                          sizeof(replay_positions));
+  assert_memory_not_equal(replay_velocities, diverged_velocities,
+                          sizeof(replay_velocities));
+  lammpc_session_destroy(replay);
+  lammpc_session_destroy(again);
+  lammpc_session_destroy(diverged);
+}
+
 static void test_overlay_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -1567,6 +1670,7 @@ int main(void) {
       cmocka_unit_test(test_md_two_session_replay_is_byte_identical),
       cmocka_unit_test(test_md_negative_friction_is_rejected),
       cmocka_unit_test(test_md_set_velocities_drive_frictionless_step),
+      cmocka_unit_test(test_md_set_velocities_reseed_under_positive_friction),
       cmocka_unit_test(test_md_step_applies_hard_boundary_each_step),
       cmocka_unit_test(test_md_reject_restores_pre_step_force_state),
       cmocka_unit_test(test_md_invalid_decision_restores_pre_step_state),
