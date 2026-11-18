@@ -587,6 +587,112 @@ static void test_destroy_disarms_hard_boundary(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void assert_nve_set_positions_keeps_atoms_energy_forces(
+    const char *boundary, const double box9[9], const double s0_ref[3],
+    const double s1_ref[3], const double s0_img[3], const double s1_img[3],
+    int pass_box_to_setter) {
+  LammpcSession *session_ref = session_from_config(boundary);
+  LammpcSession *session_img = session_from_config(boundary);
+  session_ref->params.pair_style = "lj/cut 10.0";
+  session_ref->params.pair_coeffs = {"1 1 0.2 2.5"};
+  session_img->params.pair_style = "lj/cut 10.0";
+  session_img->params.pair_coeffs = {"1 1 0.2 2.5"};
+
+  const int z[2] = {14, 14};
+  const double seed[6] = {
+      0.25 * box9[0], 0.25 * box9[4], 0.25 * box9[8],
+      0.55 * box9[0], 0.55 * box9[4], 0.55 * box9[8],
+  };
+  assert_int_equal(run_step(session_ref, seed, z, 2, box9).ok, 1);
+  assert_int_equal(run_step(session_img, seed, z, 2, box9).ok, 1);
+
+  auto to_cart = [&](const double s[3], double r[3]) {
+    r[0] = box9[0] * s[0] + box9[3] * s[1] + box9[6] * s[2];
+    r[1] = box9[4] * s[1] + box9[7] * s[2];
+    r[2] = box9[8] * s[2];
+  };
+  double ref[6] = {};
+  double img[6] = {};
+  to_cart(s0_ref, &ref[0]);
+  to_cart(s1_ref, &ref[3]);
+  to_cart(s0_img, &img[0]);
+  to_cart(s1_img, &img[3]);
+
+  const double *setter_box = pass_box_to_setter ? box9 : nullptr;
+  const size_t setter_box_len = pass_box_to_setter ? 9u : 0u;
+  assert_int_equal(lammpc_session_nve_set_positions(
+                       session_ref, ref, 6, setter_box, setter_box_len),
+                   0);
+  assert_int_equal(lammpc_session_nve_set_positions(
+                       session_img, img, 6, setter_box, setter_box_len),
+                   0);
+
+  const int *nlocal_ref = static_cast<const int *>(
+      lammps_extract_global(session_ref->lmp, "nlocal"));
+  const int *nlocal_img = static_cast<const int *>(
+      lammps_extract_global(session_img->lmp, "nlocal"));
+  assert_non_null(nlocal_ref);
+  assert_non_null(nlocal_img);
+  assert_int_equal(*nlocal_ref, 2);
+  assert_int_equal(*nlocal_img, 2);
+  assert_int_equal((int)llround(lammps_get_natoms(session_ref->lmp)), 2);
+  assert_int_equal((int)llround(lammps_get_natoms(session_img->lmp)), 2);
+
+  double pos_ref[6] = {};
+  double pos_img[6] = {};
+  LammpcNveObservation obs_ref = {};
+  LammpcNveObservation obs_img = {};
+  assert_int_equal(
+      lammpc_session_nve_state(session_ref, pos_ref, nullptr, 6, &obs_ref), 0);
+  assert_int_equal(
+      lammpc_session_nve_state(session_img, pos_img, nullptr, 6, &obs_img), 0);
+  assert_true(fabs(obs_ref.potential_energy_ev) > 1e-6);
+  assert_true(fabs(obs_ref.potential_energy_ev - obs_img.potential_energy_ev) <
+              1e-12);
+
+  double forces_ref[6] = {};
+  double forces_img[6] = {};
+  lammps_gather_atoms(session_ref->lmp, "f", 1, 3, forces_ref);
+  lammps_gather_atoms(session_img->lmp, "f", 1, 3, forces_img);
+  for (int i = 0; i < 6; ++i) {
+    assert_true(fabs(pos_ref[i] - pos_img[i]) < 1e-12);
+    assert_true(fabs(forces_ref[i] - forces_img[i]) < 1e-12);
+  }
+
+  lammpc_session_destroy(session_ref);
+  lammpc_session_destroy(session_img);
+}
+
+static void test_nve_set_positions_folds_far_images_and_keeps_atoms(
+    void **state) {
+  (void)state;
+  const double box_ortho[9] = {9.0, 0.0, 0.0, 0.0, 9.5, 0.0, 0.0, 0.0, 10.0};
+  const double box_tri[9] = {12.0, 0.0, 0.0, 1.5, 11.5, 0.0, 0.75, 0.5, 11.0};
+  const double *boxes[2] = {box_ortho, box_tri};
+  const double s0_ref[3] = {0.2, 0.3, 0.4};
+  const double s1_ref[3] = {0.45, 0.5, 0.25};
+  struct CaseSpec {
+    const char *boundary;
+    double s0_img[3];
+    double s1_img[3];
+  };
+  const CaseSpec specs[] = {
+      {"p p p", {4.2, -2.7, 5.4}, {-4.55, 6.5, -3.75}},
+      {"p p f", {4.2, -2.7, 0.4}, {-4.55, 6.5, 0.25}},
+      {"p f p", {4.2, 0.3, -3.6}, {-4.55, 0.5, 5.25}},
+      {"f p p", {0.2, -2.7, 5.4}, {0.45, 6.5, -3.75}},
+  };
+  for (const double *box9 : boxes) {
+    for (const CaseSpec &spec : specs) {
+      for (int pass_box = 0; pass_box <= 1; ++pass_box) {
+        assert_nve_set_positions_keeps_atoms_energy_forces(
+            spec.boundary, box9, s0_ref, s1_ref, spec.s0_img, spec.s1_img,
+            pass_box);
+      }
+    }
+  }
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_upper_face_precision_orthogonal),
@@ -598,6 +704,8 @@ int main(void) {
       cmocka_unit_test(test_reflect_refreshes_lammps_forces),
       cmocka_unit_test(test_reject_refreshes_lammps_forces),
       cmocka_unit_test(test_destroy_disarms_hard_boundary),
+      cmocka_unit_test(
+          test_nve_set_positions_folds_far_images_and_keeps_atoms),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

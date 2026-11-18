@@ -174,7 +174,9 @@ int lammpc_session_md_state(
  *
  * coordinate_count must match 3 * atom_count of the live session geometry.
  * If cell_ang is non-NULL then cell_len must be 9 and the simulation box is
- * updated before positions are scattered.
+ * updated before positions are scattered. When the session has a cell, far
+ * periodic images are folded through the full lattice (h_inv) along periodic
+ * axes before scattering, while non-periodic axes are left untouched.
  */
 int lammpc_session_nve_set_positions(LammpcSession *session,
                                      const double *positions_ang,

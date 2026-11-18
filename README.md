@@ -91,8 +91,9 @@ OH-TST, pair styles, and material types.
 An additive `lammpc_session_nve_*` ABI provides an opt-in unconstrained path
 for trajectory shooting and reversible dynamics checks:
 
-- `lammpc_session_nve_set_positions`: scatter Cartesian positions on the live
-  geometry and optionally update the box.
+- `lammpc_session_nve_set_positions`: fold far periodic images along periodic
+  cell axes (leaving non-periodic axes untouched), scatter Cartesian positions
+  on the live geometry, and optionally update the box.
 - `lammpc_session_nve_set_velocities`: scatter Cartesian velocities.
 - `lammpc_session_nve_step`: run exact velocity-Verlet steps with LAMMPS's own
   `fix nve` integrator (`run N`, no projection/restoration).

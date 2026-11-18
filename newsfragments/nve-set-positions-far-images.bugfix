@@ -1,0 +1,1 @@
+lammpc_session_nve_set_positions folds positions several periods outside the cell back in, the same way session creation does, so LAMMPS no longer drops those atoms.
