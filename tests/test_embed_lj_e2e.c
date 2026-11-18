@@ -112,8 +112,8 @@ static size_t write_flat(struct capn *arena, capn_ptr root_struct,
   return (size_t)written;
 }
 
-static size_t make_lj_config(const char *boundary, unsigned char *dst,
-                             size_t dst_size) {
+static size_t make_lj_config_with_units(const char *units, const char *boundary,
+                                        unsigned char *dst, size_t dst_size) {
   struct capn arena;
   capn_init_malloc(&arena);
   struct capn_segment *seg = capn_root(&arena).seg;
@@ -128,7 +128,8 @@ static size_t make_lj_config(const char *boundary, unsigned char *dst,
 
   struct LammpsParams pview;
   memset(&pview, 0, sizeof(pview));
-  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.unitsStyle =
+      (capn_text){(int)strlen(units), (char *)units, NULL};
   pview.atomStyle = (capn_text){6, "atomic", NULL};
   pview.pairStyle = (capn_text){11, "lj/cut 10.0", NULL};
   pview.pairCoeffs = coeffs;
@@ -147,6 +148,11 @@ static size_t make_lj_config(const char *boundary, unsigned char *dst,
   size_t written = write_flat(&arena, config.p, dst, dst_size);
   capn_free(&arena);
   return written;
+}
+
+static size_t make_lj_config(const char *boundary, unsigned char *dst,
+                             size_t dst_size) {
+  return make_lj_config_with_units("metal", boundary, dst, dst_size);
 }
 
 static size_t make_config(unsigned char *dst, size_t dst_size) {
@@ -526,6 +532,17 @@ static void test_lj_dimer_one_shot_config(void **state) {
   decode_result(out, wrote, &energy, forces);
   free(out);
   assert_true(fabs(energy - lj_energy(3.0)) < 1e-9);
+}
+
+static void test_real_units_are_rejected(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size =
+      make_lj_config_with_units("real", "f f f", config, sizeof(config));
+
+  assert_null(lammpc_session_create_from_config(config, config_size));
+  assert_string_equal(lammpc_last_error(),
+                      "only unitsStyle=metal is supported");
 }
 
 static void test_projected_md_stays_on_plane(void **state) {
@@ -943,6 +960,7 @@ int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
       cmocka_unit_test(test_lj_dimer_one_shot_config),
+      cmocka_unit_test(test_real_units_are_rejected),
       cmocka_unit_test(test_triclinic_plus2a_face_reproducer),
       cmocka_unit_test(test_triclinic_minus1a_face_reproducer),
       cmocka_unit_test(test_orthogonal_nextafter_2l_reproducer),
