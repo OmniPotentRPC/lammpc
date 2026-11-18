@@ -49,6 +49,10 @@ typedef enum LammpcPlaneCoordinates {
  *
  * Metal units are used: time_step_ps in ps, thermal_energy_ev in eV, and
  * friction_per_ps in ps^-1. A zero seed is valid and deterministic.
+ * time_step_ps and thermal_energy_ev must be finite and positive.
+ * friction_per_ps must be finite and non-negative. Zero friction selects
+ * projected velocity Verlet on the configured plane: Langevin drag and the
+ * random kick are omitted. Negative friction is rejected.
  */
 typedef struct LammpcMdConfig {
   double time_step_ps;       /**< Finite positive time step in ps. */
@@ -172,7 +176,8 @@ void lammpc_session_destroy(LammpcSession *session);
  * eV/angstrom units. point and normal contain one value per Cartesian
  * coordinate. The initial position is restored to the plane, velocities are
  * drawn from the configured Maxwell distribution, and both velocity and
- * force are projected before returning.
+ * force are projected before returning. Zero friction_per_ps is accepted;
+ * later steps then omit Langevin drag and noise.
  */
 int lammpc_session_md_initialize(
     LammpcSession *session, const void *force_input_capnp,
@@ -200,6 +205,12 @@ int lammpc_session_masses(LammpcSession *session, double *masses_amu,
 
 /**
  * @brief Advance exactly step_count projected BAOAB steps.
+ *
+ * On an initialized session, a step_count of zero is a no-op. Positions,
+ * velocities, forces, the removed-velocity record, the random stream, and
+ * the step and force counters stay unchanged; the call does not project
+ * or evaluate forces. Each positive step with friction_per_ps of zero is
+ * projected velocity Verlet on the configured plane.
  *
  * When a hard-boundary callback is armed, it receives the unwrapped
  * post-step MD positions once per step. A reflected position is projected
