@@ -141,6 +141,17 @@ install_headers(
 
 if get_option('with_tests')
   test(
+    'public-api-example',
+    executable(
+      'public_api_example',
+      'examples/inspect.c',
+      dependencies: lammpc_shared_dep,
+      include_directories: inc,
+      c_args: common_c_args,
+    ),
+    suite: ['stub', 'docs'],
+  )
+  test(
     'stub-abi',
     executable(
       'test_stub_abi',

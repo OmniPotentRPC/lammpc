@@ -3,3 +3,6 @@ build*/
 *.o
 *.so
 .lammps-install/
+subprojects/packagecache/
+subprojects/minimage-*/
+subprojects/potentials-schema-*/

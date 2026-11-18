@@ -7,22 +7,24 @@ on:
       - develop
     tags:
       - '*'
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - newsfragments/**
-      - LICENSE
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches: [main]
-    paths-ignore:
-      - docs/**
-      - '**/*.md'
-      - newsfragments/**
-      - LICENSE
   workflow_dispatch:
 
 jobs:
+  docs:
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.3
+        with:
+          pixi-version: latest
+          cache: true
+      - name: API documentation and links
+        run: pixi run docs
+
   stub-and-lint:
     if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest

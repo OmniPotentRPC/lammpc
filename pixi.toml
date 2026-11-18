@@ -10,6 +10,7 @@ version = "0.1.0"
 capnproto = ">=1.0.2,<2"
 cmocka = ">=1.1.7,<3"
 compilers = ">=1.8.0,<2"
+doxygen = ">=1.12,<2"
 meson = ">=1.5.2,<2"
 ninja = ">=1.11,<2"
 pkgconf = ">=2.5.1,<3"
@@ -18,6 +19,7 @@ python = ">=3.10,<4"
 [tasks]
 test-stub = { cmd = "meson setup build -Dwith_tests=true && meson compile -C build && meson test -C build --print-errorlogs", description = "Configure, build, and test the stub" }
 test-stub-sanitize = { cmd = "meson setup build-sanitize -Dwith_tests=true -Db_sanitize=address,undefined -Db_lundef=false && meson compile -C build-sanitize && ASAN_OPTIONS=detect_leaks=0 meson test -C build-sanitize --print-errorlogs", description = "Stub suite under ASan/UBSan" }
+docs = { cmd = "rm -rf build-docs && doxygen Doxyfile && python scripts/check_doc_links.py", description = "Build API documentation and check documentation links" }
 
 [environments]
 embed = { features = ["embed"] }
