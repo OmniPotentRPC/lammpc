@@ -513,6 +513,151 @@ static void test_invalid_callback_refreshes_lammps_forces(void **state) {
   lammpc_session_destroy(session);
 }
 
+struct MdInjectEvalFailBoundary {
+  LammpcSession *session = nullptr;
+  int calls = 0;
+  int fail_on_call = 0;
+  int out_of_box = 0;
+};
+
+static int reflect_and_inject_eval_failure(void *user, int n_atoms,
+                                           double *positions,
+                                           double *velocities,
+                                           const LammpcBoundaryBox *box) {
+  (void)box;
+  auto *ctx = static_cast<MdInjectEvalFailBoundary *>(user);
+  ctx->calls += 1;
+  assert_int_equal(n_atoms, 2);
+  if (ctx->calls < ctx->fail_on_call)
+    return LAMMPC_BOUNDARY_ACCEPT;
+  if (ctx->out_of_box) {
+    positions[1] = 1000.0;
+    return LAMMPC_BOUNDARY_REFLECT;
+  }
+  positions[0] -= 0.05;
+  positions[1] += 0.02;
+  positions[3] += 0.08;
+  velocities[0] += 1.5;
+  velocities[1] -= 0.4;
+  velocities[3] -= 0.75;
+  (void)lammps_command(ctx->session->lmp,
+                       "fix inject_fail all external pf/callback 1 1");
+  return LAMMPC_BOUNDARY_REFLECT;
+}
+
+static void test_md_reflect_eval_failure_rolls_back_step(void **state) {
+  (void)state;
+  unsigned char config[16384];
+  const size_t config_size = make_lj_config(config, sizeof(config));
+  const double box9[9] = {20.0, 0.0, 0.0, 0.0, 20.0,
+                          0.0,  0.0, 0.0, 20.0};
+  const int z[2] = {29, 29};
+  const double initial_positions[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  unsigned char step[16384];
+  const size_t step_size =
+      make_step(initial_positions, z, 2, box9, step, sizeof(step));
+
+  const double inverse_sqrt_two = 1.0 / std::sqrt(2.0);
+  const double point[6] = {5.0, 5.0, 5.0, 8.0, 5.0, 5.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      0.0002, 0.01, 10.0, 37ULL, LAMMPC_PLANE_CARTESIAN,
+  };
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *reference =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  assert_non_null(reference);
+  assert_int_equal(lammpc_session_md_initialize(session, step, step_size, point,
+                                                normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(reference, step, step_size,
+                                                point, normal, 6, &controls),
+                   0);
+
+  MdInjectEvalFailBoundary ctx{session, 0, 2, 0};
+  assert_int_equal(lammpc_session_set_hard_boundary(
+                       session, reflect_and_inject_eval_failure, &ctx),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 3), -1);
+  assert_int_equal(ctx.calls, 2);
+  assert_non_null(
+      strstr(lammpc_last_error(), "Fix external callback function not set"));
+
+  assert_int_equal(lammpc_session_md_step(reference, 1), 0);
+
+  double session_positions[6], session_velocities[6], session_forces[6];
+  double session_removed[6];
+  double reference_positions[6], reference_velocities[6], reference_forces[6];
+  double reference_removed[6];
+  LammpcMdObservation session_obs, reference_obs;
+  assert_int_equal(lammpc_session_md_state(
+                       session, session_positions, session_velocities,
+                       session_forces, session_removed, 6, &session_obs),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       reference, reference_positions, reference_velocities,
+                       reference_forces, reference_removed, 6, &reference_obs),
+                   0);
+  assert_memory_equal(session_positions, reference_positions,
+                      sizeof(session_positions));
+  assert_memory_equal(session_velocities, reference_velocities,
+                      sizeof(session_velocities));
+  assert_memory_equal(session_forces, reference_forces, sizeof(session_forces));
+  assert_memory_equal(session_removed, reference_removed,
+                      sizeof(session_removed));
+  assert_memory_equal(&session_obs.constraint_force,
+                      &reference_obs.constraint_force, sizeof(double));
+  assert_memory_equal(session->md_rng, reference->md_rng,
+                      sizeof(session->md_rng));
+  assert_int_equal(session_obs.steps, 1u);
+  assert_int_equal(session_obs.steps, reference_obs.steps);
+  assert_int_equal(session_obs.force_evaluations,
+                   reference_obs.force_evaluations + 1u);
+
+  assert_int_equal(run_cmd(session->lmp, "unfix inject_fail"), 0);
+  assert_int_equal(lammpc_session_clear_hard_boundary(session), 0);
+  assert_int_equal(lammpc_session_md_step(session, 4), 0);
+  assert_int_equal(lammpc_session_md_step(reference, 4), 0);
+  assert_int_equal(lammpc_session_md_state(
+                       session, session_positions, session_velocities,
+                       session_forces, session_removed, 6, &session_obs),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       reference, reference_positions, reference_velocities,
+                       reference_forces, reference_removed, 6, &reference_obs),
+                   0);
+  assert_memory_equal(session_positions, reference_positions,
+                      sizeof(session_positions));
+  assert_memory_equal(session_velocities, reference_velocities,
+                      sizeof(session_velocities));
+  assert_memory_equal(session_forces, reference_forces, sizeof(session_forces));
+  assert_memory_equal(session_removed, reference_removed,
+                      sizeof(session_removed));
+  assert_memory_equal(&session_obs.constraint_force,
+                      &reference_obs.constraint_force, sizeof(double));
+  assert_memory_equal(session->md_rng, reference->md_rng,
+                      sizeof(session->md_rng));
+  assert_int_equal(session_obs.steps, 5u);
+
+  MdInjectEvalFailBoundary lost_ctx{session, 0, 1, 1};
+  assert_int_equal(lammpc_session_set_hard_boundary(
+                       session, reflect_and_inject_eval_failure, &lost_ctx),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), -1);
+  assert_int_equal(lost_ctx.calls, 1);
+  assert_false(session->md_ready);
+  assert_int_equal(lammpc_session_md_step(session, 1), -1);
+  assert_non_null(
+      strstr(lammpc_last_error(), "constrained MD is not initialized"));
+
+  lammpc_session_destroy(session);
+  lammpc_session_destroy(reference);
+}
+
 /*
  * Destroy drops the host callback before it closes LAMMPS. Attach the
  * fix, prove one step calls the host, disarm, and prove the next step
@@ -561,6 +706,7 @@ int main(void) {
       cmocka_unit_test(test_reflect_refreshes_lammps_forces),
       cmocka_unit_test(test_reject_refreshes_lammps_forces),
       cmocka_unit_test(test_invalid_callback_refreshes_lammps_forces),
+      cmocka_unit_test(test_md_reflect_eval_failure_rolls_back_step),
       cmocka_unit_test(test_destroy_disarms_hard_boundary),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

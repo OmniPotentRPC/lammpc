@@ -2,6 +2,7 @@
 #include "lammpc_params.h"
 #include "lammpc_boundary_embed.h"
 
+#include "atom.h"
 #include "domain.h"
 #include "lammps.h"
 #include "library.h"
@@ -1009,22 +1010,32 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
   const double h = session->md_config.time_step_ps;
   const double decay =
       std::exp(-session->md_config.friction_per_ps * h);
+  std::vector<double> previous_positions;
+  std::vector<double> previous_velocities;
+  std::vector<double> previous_forces;
+  std::vector<double> previous_removed_velocities;
   for (size_t step = 0; step < step_count; ++step) {
     const bool hard_boundary_armed = session->hard_boundary.fn != nullptr;
-    std::vector<double> previous_positions;
-    std::vector<double> previous_velocities;
-    std::vector<double> previous_forces;
-    std::vector<double> previous_removed_velocities;
-    double previous_constraint_force = 0.0;
+    previous_positions = session->md_positions;
+    previous_velocities = session->md_velocities;
+    previous_forces = session->md_forces;
+    previous_removed_velocities = session->md_removed_velocities;
+    const double previous_constraint_force = session->md_constraint_force;
     uint64_t previous_rng[4] = {};
-    if (hard_boundary_armed) {
-      previous_positions = session->md_positions;
-      previous_velocities = session->md_velocities;
-      previous_forces = session->md_forces;
-      previous_removed_velocities = session->md_removed_velocities;
-      previous_constraint_force = session->md_constraint_force;
-      std::memcpy(previous_rng, session->md_rng, sizeof(previous_rng));
-    }
+    std::memcpy(previous_rng, session->md_rng, sizeof(previous_rng));
+    auto rollback_step = [&]() {
+      session->md_positions = previous_positions;
+      session->md_velocities = previous_velocities;
+      session->md_forces = previous_forces;
+      session->md_removed_velocities = previous_removed_velocities;
+      session->md_constraint_force = previous_constraint_force;
+      std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
+      if (!session->lmp ||
+          static_cast<LAMMPS_NS::LAMMPS *>(session->lmp)->atom->nlocal !=
+              static_cast<int>(session->n_atoms)) {
+        session->md_ready = false;
+      }
+    };
     for (size_t i = 0; i < session->md_velocities.size(); ++i)
       session->md_velocities[i] +=
           0.5 * h * session->md_forces[i] /
@@ -1044,8 +1055,10 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
     for (size_t i = 0; i < session->md_positions.size(); ++i)
       session->md_positions[i] += 0.5 * h * session->md_velocities[i];
     md_restore_position(session);
-    if (md_evaluate(session) != 0)
+    if (md_evaluate(session) != 0) {
+      rollback_step();
       return -1;
+    }
     for (size_t i = 0; i < session->md_velocities.size(); ++i)
       session->md_velocities[i] +=
           0.5 * h * session->md_forces[i] /
@@ -1054,20 +1067,21 @@ int lammpc_session_md_step(LammpcSession *session, size_t step_count) {
     if (hard_boundary_armed) {
       const int decision = md_apply_hard_boundary(
           session, previous_positions, previous_velocities);
-      if (decision == LAMMPC_BOUNDARY_REJECT || decision < 0) {
-        session->md_forces = std::move(previous_forces);
-        session->md_removed_velocities =
-            std::move(previous_removed_velocities);
+      if (decision < 0) {
+        rollback_step();
+        return -1;
+      }
+      if (decision == LAMMPC_BOUNDARY_REJECT) {
+        session->md_forces = previous_forces;
+        session->md_removed_velocities = previous_removed_velocities;
         session->md_constraint_force = previous_constraint_force;
-        if (decision < 0) {
-          std::memcpy(session->md_rng, previous_rng, sizeof(previous_rng));
-          return -1;
-        }
       } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
         md_restore_position(session);
         md_project_velocity(session);
-        if (md_evaluate(session) != 0)
+        if (md_evaluate(session) != 0) {
+          rollback_step();
           return -1;
+        }
       }
     }
     ++session->md_steps;
