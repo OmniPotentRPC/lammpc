@@ -301,6 +301,9 @@ size_t lammpc_potential_result_size_for_force_input(
  * Returns 0 on success. On a too-small buffer (including the pure size query
  * `capabilities_capnp == NULL`, `capabilities_capnp_capacity_bytes == 0`)
  * returns -1 with `*capabilities_capnp_size_bytes` set to the required size.
+ * If allocating or encoding the message fails, it also returns -1 and leaves
+ * `*capabilities_capnp_size_bytes` at 0. It returns -1 without writing anything
+ * when `capabilities_capnp_size_bytes` is `NULL`.
  */
 int lammpc_capabilities_result(void *capabilities_capnp,
                                size_t capabilities_capnp_capacity_bytes,

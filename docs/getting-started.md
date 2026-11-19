@@ -26,8 +26,10 @@ The `docs-api-snippets` test extracts the C snippets from
 against `liblammpc.so`, and checks each snippet's return status (expecting
 an error return from the stub build and live session success in the embed
 build) so renamed API symbols, changed argument lists, or failing calls fail
-the test. It does not cover other pages such as
-[Hard boundary ABI](hard-boundary.org).
+the test. It reads only `docs/how-to.md`, so it skips
+[Hard boundary ABI](hard-boundary.org). The `docs-c-snippets-compile` test
+covers that page: it compiles, without linking or running, every C block in
+`README.md` and in the Markdown and Org pages under `docs`.
 Run the inspect example directly after the build with:
 
 ```sh

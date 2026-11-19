@@ -79,7 +79,7 @@ The following calls neither set nor clear `lammpc_last_error()`:
 | Function | Reason |
 | --- | --- |
 | `lammpc_hard_boundary_apply` | Pure C callback helper; returns decision code or `-1`. |
-| `lammpc_capabilities_result` | Pure C encoder. Returns `-1` and writes nothing when `capabilities_capnp_size_bytes` is `NULL`. Otherwise it sets `*capabilities_capnp_size_bytes` to zero first. If allocating or encoding the message fails, it returns `-1` and the size stays zero. If encoding succeeds, it stores the required byte count there, then returns `-1` when the output buffer is `NULL` or smaller than that count, and otherwise copies the message and returns `0`. |
+| `lammpc_capabilities_result` | Pure C encoder. Returns `-1` and writes nothing when `capabilities_capnp_size_bytes` is `NULL`. Otherwise it sets `*capabilities_capnp_size_bytes` to zero first. If allocating or encoding the message fails, including a `capn_set_text` or `capn_setp` failure, it returns `-1` and the size stays zero. If encoding succeeds, it stores the required byte count there, then returns `-1` when the output buffer is `NULL` or smaller than that count, and otherwise copies the message and returns `0`. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION` directly. |
 | `lammpc_available` | Returns `1` or `0` directly. |
 | `lammpc_potential_result_size_for_force_input` | Returns byte count or `0` on invalid or unrepresentable input in the embed, and always returns `0` in the stub. |
@@ -122,7 +122,8 @@ outside the contract.
 For a capabilities size query, pass `NULL`, zero, and a valid size output
 pointer. The function returns minus one and writes the required byte count.
 Repeat the call with a buffer of at least that size. A missing size output
-pointer is an error.
+pointer is an error. If allocating or encoding the message fails, the function
+also returns minus one, but the size output stays zero.
 
 Feature table pointers and their strings remain valid for the life of the
 loaded library. Callers must not free or modify them.
