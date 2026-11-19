@@ -23,9 +23,10 @@ the C test suite. The installed header set consists of `lammpc.h`,
 The `public-api-example` test builds and runs `examples/inspect.c`.
 The `docs-api-snippets` test extracts the C snippets from
 [How to use sessions](how-to.md) at build time, compiles and links them
-against `liblammpc.so`, and calls them with dummy and `NULL` inputs so
-renamed API symbols or changed argument lists fail the build. It does not
-execute live LAMMPS sessions or cover other pages such as
+against `liblammpc.so`, and checks each snippet's return status (expecting
+an error return from the stub build and live session success in the embed
+build) so renamed API symbols, changed argument lists, or failing calls fail
+the test. It does not cover other pages such as
 [Hard boundary ABI](hard-boundary.org).
 Run the inspect example directly after the build with:
 

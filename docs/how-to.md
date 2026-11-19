@@ -44,6 +44,8 @@ LammpcResult result = lammpc_session_calculate_result(
     session, input, input_size, output, capacity, &output_size);
 if (!result.ok) {
   fprintf(stderr, "%s\n", result.message);
+  free(output);
+  return 1;
 }
 ```
 
@@ -77,8 +79,10 @@ LammpcMdConfig md = {
     .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
 };
 if (lammpc_session_md_initialize(
-        session, input, input_size, point, normal, coordinate_count, &md) != 0)
+        session, input, input_size, point, normal, coordinate_count, &md) != 0) {
   fprintf(stderr, "%s\n", lammpc_last_error());
+  return 1;
+}
 ```
 
 Call `lammpc_session_md_step()` to advance an exact number of iterations.
@@ -114,8 +118,10 @@ The callback is active for `lammpc_session_integrate()` and projected MD.
 NVE entry points ignore it. Clear it before releasing callback state:
 
 ```c
-if (lammpc_session_clear_hard_boundary(session) != 0)
+if (lammpc_session_clear_hard_boundary(session) != 0) {
   fprintf(stderr, "%s\n", lammpc_last_error());
+  return 1;
+}
 ```
 
 See [Hard boundary ABI](hard-boundary.org) for the decision rules.
