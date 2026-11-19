@@ -78,9 +78,11 @@ invoke it.
 
 ## Concurrency model
 
-The diagnostic buffer is thread local. Hard boundary state and all dynamics
-state belong to a session. This permits independent sessions in independent
-threads.
+The diagnostic buffer is thread local in the embed (a 512 byte buffer updated
+only by session creation, configuration, evaluation, MD, NVE, hard boundary
+hook, and direct integration calls) and a read only static string in the stub.
+Hard boundary state and all dynamics state belong to a session. This permits
+independent sessions in independent threads.
 
 A session has no internal mutex. Concurrent access to one session can race on
 its LAMMPS handle, vectors, counters, and callback state. External

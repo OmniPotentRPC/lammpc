@@ -1,0 +1,8 @@
+Clarify `lammpc_last_error()` scope, `thread_local` buffer lifetime, and the
+fixed stub message across the API headers and reference pages (while keeping
+`lammpc_hard_boundary_apply()`, `lammpc_capabilities_result()`,
+`lammpc_abi_version()`, `lammpc_available()`,
+`lammpc_potential_result_size_for_force_input()`, lifecycle teardown, and
+read-only queries listed as non-updating exceptions), mark
+`lammpc_set_params()` as a legacy global entry point, and extract the
+`docs/how-to.md` C snippets at build time for `docs-api-snippets`.
