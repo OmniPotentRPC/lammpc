@@ -77,7 +77,7 @@ The following calls neither set nor clear `lammpc_last_error()`:
 | Function | Reason |
 | --- | --- |
 | `lammpc_hard_boundary_apply` | Pure C callback helper; returns decision code or `-1`. |
-| `lammpc_capabilities_result` | Pure C encoder; returns `0` or `-1` via `*capabilities_capnp_size_bytes`. |
+| `lammpc_capabilities_result` | Pure C encoder; writes the required byte count to `*capabilities_capnp_size_bytes` and returns `0` on success or `-1` when `capabilities_capnp_size_bytes` is `NULL`, encoding fails, or the output buffer is `NULL` or too small. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION` directly. |
 | `lammpc_available` | Returns `1` or `0` directly. |
 | `lammpc_potential_result_size_for_force_input` | Returns byte count or `0` on invalid input. |
