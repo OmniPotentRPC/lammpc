@@ -162,6 +162,11 @@ if get_option('with_tests')
       '@OUTPUT@',
     ],
   )
+  snippet_c_args = common_c_args + cc.get_supported_arguments(
+    '-Werror=incompatible-pointer-types',
+    '-Werror=int-conversion',
+    '-Werror=implicit-function-declaration',
+  )
   test(
     'docs-api-snippets',
     executable(
@@ -169,7 +174,7 @@ if get_option('with_tests')
       howto_c_snippets_src,
       dependencies: lammpc_shared_dep,
       include_directories: inc,
-      c_args: common_c_args,
+      c_args: snippet_c_args,
     ),
     suite: ['stub', 'docs'],
   )
