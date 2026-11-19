@@ -80,7 +80,9 @@ invoke it.
 
 The diagnostic buffer is thread local in the embed (a 512 byte buffer updated
 only by session creation, configuration, evaluation, MD, NVE, hard boundary
-hook, and direct integration calls) and a read only static string in the stub.
+hook, direct integration, `lammpc_set_params()`, and the legacy raw array calls
+`lammpc_energy()`, `lammpc_energy_forces()`, and `lammpc_energy_gradient()`)
+and a read only static string in the stub.
 Hard boundary state and all dynamics state belong to a session. This permits
 independent sessions in independent threads.
 
