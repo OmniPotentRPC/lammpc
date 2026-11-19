@@ -179,6 +179,12 @@ if get_option('with_tests')
     suite: ['stub', 'docs'],
   )
   test(
+    'extract-howto-c-snippets',
+    python,
+    args: [files('tools/extract_howto_c_snippets.py'), '--self-test'],
+    suite: ['stub', 'docs'],
+  )
+  test(
     'stub-abi',
     executable(
       'test_stub_abi',

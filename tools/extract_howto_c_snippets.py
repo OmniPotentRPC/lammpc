@@ -17,29 +17,60 @@ from pathlib import Path
 
 SESSION_DECL_RE = re.compile(r"\bLammpcSession\s*\*\s*session\b")
 OUTPUT_DECL_RE = re.compile(r"\bvoid\s*\*\s*output\b")
+OPEN_FENCE_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})[ \t]*(?P<info>.*)$")
+C_INFO_RE = re.compile(
+    r"^(?:[cC](?:$|[ \t].*|\{.*\}$)|\{\s*\.[cC](?:[ \t#][^}]*)?\})$"
+)
+ORG_BEGIN_RE = re.compile(
+    r"^#\+begin_src[ \t]+(?P<lang>[^\s]+)(?:[ \t].*)?$", re.IGNORECASE
+)
+ORG_END_RE = re.compile(r"^#\+end_src$", re.IGNORECASE)
+
+
+def _is_closing_fence(stripped: str, fence_marker: str) -> bool:
+    if fence_marker == "#+end_src":
+        return bool(ORG_END_RE.match(stripped))
+    char = fence_marker[0]
+    return len(stripped) >= len(fence_marker) and stripped == char * len(stripped)
 
 
 def extract_c_blocks(markdown: str) -> list[tuple[int, str]]:
     blocks: list[tuple[int, str]] = []
+    active_fence: str | None = None
     in_c_fence = False
     start_line = 0
     lines: list[str] = []
 
     for lineno, line in enumerate(markdown.splitlines(), start=1):
         stripped = line.strip()
-        if not in_c_fence:
-            if stripped == "```c":
-                in_c_fence = True
-                start_line = lineno + 1
-                lines = []
+        if active_fence is None:
+            match = OPEN_FENCE_RE.match(stripped)
+            if match is not None:
+                active_fence = match.group("fence")
+                info = match.group("info").strip()
+                in_c_fence = bool(C_INFO_RE.match(info))
+                if in_c_fence:
+                    start_line = lineno + 1
+                    lines = []
+                continue
+            org_match = ORG_BEGIN_RE.match(stripped)
+            if org_match is not None:
+                active_fence = "#+end_src"
+                in_c_fence = org_match.group("lang").lower() == "c"
+                if in_c_fence:
+                    start_line = lineno + 1
+                    lines = []
+                continue
         else:
-            if stripped == "```":
-                blocks.append((start_line, "\n".join(lines)))
+            if _is_closing_fence(stripped, active_fence):
+                if in_c_fence:
+                    blocks.append((start_line, "\n".join(lines)))
+                active_fence = None
                 in_c_fence = False
-            else:
+            elif in_c_fence:
                 lines.append(line)
 
-    if in_c_fence:
+    if active_fence is not None and in_c_fence:
         raise RuntimeError(f"unclosed ```c fence starting at line {start_line - 1}")
     if not blocks:
         raise RuntimeError("no ```c fences found")
@@ -181,10 +212,111 @@ def render_c(input_path: Path, blocks: list[tuple[int, str]]) -> str:
     return "\n".join(parts) + "\n"
 
 
+def run_self_test() -> int:
+    sample = "\n".join(
+        [
+            "# Sample",
+            "```c",
+            "int plain = 1;",
+            "```",
+            "```c {.numberLines}",
+            "int with_attr = 2;",
+            "```",
+            "```c{linenos=true}",
+            "int attached_attr = 3;",
+            "```",
+            "```{.c}",
+            "int pandoc_plain = 4;",
+            "```",
+            "``` {.c .numberLines #id}",
+            "int pandoc_attr = 5;",
+            "```",
+            "~~~c",
+            "int tilde_c = 6;",
+            "~~~",
+            "#+begin_src c",
+            "int org_c = 7;",
+            "#+end_src",
+            "```sh",
+            "echo not_c",
+            "```",
+            "```text",
+            "plain text",
+            "```",
+            "```cpp",
+            "int not_c_cpp = 0;",
+            "```",
+            "```c++",
+            "int not_c_cxx = 0;",
+            "```",
+            "```c#",
+            "int not_c_sharp = 0;",
+            "```",
+            "```cmake",
+            "project(not_c)",
+            "```",
+            "```capnp",
+            "@0x1234;",
+            "```",
+            "```{.cpp}",
+            "int not_c_pandoc_cpp = 0;",
+            "```",
+            "````markdown",
+            "```c",
+            "int nested_inside_non_c = 0;",
+            "```",
+            "````",
+            "```",
+            "untagged block",
+            "```",
+            "#+begin_src sh",
+            "echo org_sh",
+            "#+end_src",
+        ]
+    )
+    extracted = extract_c_blocks(sample)
+    expected = [
+        (3, "int plain = 1;"),
+        (6, "int with_attr = 2;"),
+        (9, "int attached_attr = 3;"),
+        (12, "int pandoc_plain = 4;"),
+        (15, "int pandoc_attr = 5;"),
+        (18, "int tilde_c = 6;"),
+        (21, "int org_c = 7;"),
+    ]
+    if extracted != expected:
+        raise AssertionError(f"expected {expected!r}, got {extracted!r}")
+
+    for non_c in (
+        "```sh\necho hi\n```\n",
+        "```cpp\nint x;\n```\n",
+        "```c++\nint x;\n```\n",
+        "```{.cpp}\nint x;\n```\n",
+        "```\nint x;\n```\n",
+    ):
+        try:
+            extract_c_blocks(non_c)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"non-C block unexpectedly extracted: {non_c!r}")
+
+    try:
+        extract_c_blocks("```{.c}\nint x = 0;\n")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("unclosed C fence did not raise RuntimeError")
+
+    return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
+        return run_self_test()
     if len(sys.argv) != 3:
         print(
-            "usage: extract_howto_c_snippets.py INPUT_MD OUTPUT_C",
+            "usage: extract_howto_c_snippets.py INPUT_MD OUTPUT_C | --self-test",
             file=sys.stderr,
         )
         return 2
