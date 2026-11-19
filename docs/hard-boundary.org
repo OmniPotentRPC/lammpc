@@ -34,12 +34,26 @@ apply call returns -1. The embed fix then stops the run.
 
 * Callback
 
-Declared in =include/lammpc_boundary.h=:
+The callback type is =LammpcHardBoundaryFn=, declared in
+=include/lammpc_boundary.h= together with =LammpcBoundaryBox=. This
+callback rejects any step that leaves the box along z:
 
 #+begin_src c
-int (*LammpcHardBoundaryFn)(void *user, int n_atoms, double *positions,
-                            double *velocities,
-                            const LammpcBoundaryBox *box);
+#include "lammpc_boundary.h"
+
+int host_region(void *user, int n_atoms, double *positions,
+                double *velocities, const LammpcBoundaryBox *box) {
+  (void)user;
+  (void)velocities;
+  for (int i = 0; i < n_atoms; ++i) {
+    const double z = positions[3 * i + 2];
+    if (z < box->lo[2] || z > box->hi[2])
+      return LAMMPC_BOUNDARY_REJECT;
+  }
+  return LAMMPC_BOUNDARY_ACCEPT;
+}
+
+const LammpcHardBoundaryFn host_region_fn = host_region;
 #+end_src
 
 =positions= and =velocities= each hold =3 * n_atoms= doubles in ascending
