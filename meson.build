@@ -184,6 +184,21 @@ if get_option('with_tests')
     args: [files('tools/extract_howto_c_snippets.py'), '--self-test'],
     suite: ['stub', 'docs'],
   )
+  docs_cc_args = []
+  foreach c : cc.cmd_array()
+    docs_cc_args += ['--cc', c]
+  endforeach
+  test(
+    'docs-c-snippets-compile',
+    python,
+    args: [
+      files('tools/extract_howto_c_snippets.py'),
+      '--check-docs',
+      '--root', meson.current_source_dir(),
+      '--include-dir', meson.current_source_dir() / 'include',
+    ] + docs_cc_args,
+    suite: ['stub', 'docs'],
+  )
   test(
     'stub-abi',
     executable(

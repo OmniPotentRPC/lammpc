@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""Extract C code fences from docs/how-to.md into a build-time smoke test.
+"""Extract C code fences from the documentation into build-time tests.
 
-Only fenced C blocks in the input Markdown file are extracted. Each snippet is
-wrapped in a function with valid PotentialConfig and ForceInput buffers and its
-return status is checked in main() (expecting 0 when LAMMPS is linked and 1 on
-the stub build) so renamed symbols, changed parameter lists, stale struct
-fields, or failing calls fail the test. Other doc pages (such as
-docs/hard-boundary.org) are outside this check.
+Given docs/how-to.md and an output path, every fenced C block is wrapped in a
+function with valid PotentialConfig and ForceInput buffers and its return
+status is checked in main() (expecting 0 when LAMMPS is linked and 1 on the
+stub build) so renamed symbols, changed parameter lists, stale struct fields,
+or failing calls fail the test.
+
+With `--check-docs ROOT` every C block in `README.md` and in the Markdown and
+Org pages under `docs/` is compiled with `-Wall -Wextra -Werror` against the
+public headers. Blocks in how-to.md are fragments and get the same wrapper as
+above. Blocks in every other page must be complete translation units that
+include their own headers. Compiling only, nothing is linked or run.
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+FRAGMENT_PAGES = frozenset({"how-to.md"})
 
 SESSION_DECL_RE = re.compile(r"\bLammpcSession\s*\*\s*session\b")
 OUTPUT_DECL_RE = re.compile(r"\bvoid\s*\*\s*output\b")
@@ -34,7 +43,9 @@ def _is_closing_fence(stripped: str, fence_marker: str) -> bool:
     return len(stripped) >= len(fence_marker) and stripped == char * len(stripped)
 
 
-def extract_c_blocks(markdown: str) -> list[tuple[int, str]]:
+def extract_c_blocks(
+    markdown: str, require_blocks: bool = True
+) -> list[tuple[int, str]]:
     blocks: list[tuple[int, str]] = []
     active_fence: str | None = None
     in_c_fence = False
@@ -72,7 +83,7 @@ def extract_c_blocks(markdown: str) -> list[tuple[int, str]]:
 
     if active_fence is not None and in_c_fence:
         raise RuntimeError(f"unclosed ```c fence starting at line {start_line - 1}")
-    if not blocks:
+    if not blocks and require_blocks:
         raise RuntimeError("no ```c fences found")
     return blocks
 
@@ -212,6 +223,69 @@ def render_c(input_path: Path, blocks: list[tuple[int, str]]) -> str:
     return "\n".join(parts) + "\n"
 
 
+def doc_pages(root: Path) -> list[Path]:
+    pages = [root / "README.md"]
+    for pattern in ("*.md", "*.org"):
+        pages.extend(sorted((root / "docs").glob(pattern)))
+    return pages
+
+
+def compile_source(
+    cc: list[str], include_dir: Path, source: str, label: str
+) -> str | None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "snippet.c"
+        path.write_text(source, encoding="utf-8")
+        result = subprocess.run(
+            [
+                *cc,
+                "-std=c11",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                f"-I{include_dir}",
+                "-c",
+                str(path),
+                "-o",
+                str(Path(tmp) / "snippet.o"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    if result.returncode == 0:
+        return None
+    return f"{label}\n{result.stderr}"
+
+
+def check_docs(root: Path, cc: list[str], include_dir: Path) -> int:
+    failures: list[str] = []
+    checked = 0
+    for page in doc_pages(root):
+        label_path = page.relative_to(root).as_posix()
+        blocks = extract_c_blocks(
+            page.read_text(encoding="utf-8"), require_blocks=False
+        )
+        for start_line, body in blocks:
+            checked += 1
+            label = f"{label_path}:{start_line}"
+            if page.name in FRAGMENT_PAGES:
+                source = render_c(Path(label_path), [(start_line, body)])
+            else:
+                source = f'#line {start_line} "{label_path}"\n{body}\n'
+            error = compile_source(cc, include_dir, source, label)
+            print(f"{'FAIL' if error else 'ok  '} {label}")
+            if error:
+                failures.append(error)
+    if checked == 0:
+        print("no C snippets found in the documentation", file=sys.stderr)
+        return 1
+    for error in failures:
+        print(error, file=sys.stderr)
+    print(f"{checked - len(failures)} of {checked} documentation C snippets compile")
+    return 1 if failures else 0
+
+
 def run_self_test() -> int:
     sample = "\n".join(
         [
@@ -308,15 +382,43 @@ def run_self_test() -> int:
     else:
         raise AssertionError("unclosed C fence did not raise RuntimeError")
 
+    if extract_c_blocks("no code here\n", require_blocks=False):
+        raise AssertionError("page without C fences produced blocks")
+
     return 0
 
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         return run_self_test()
+    if len(sys.argv) >= 2 and sys.argv[1] == "--check-docs":
+        args = sys.argv[2:]
+        cc: list[str] = []
+        include_dir: Path | None = None
+        root: Path | None = None
+        while args:
+            flag = args.pop(0)
+            if flag == "--cc" and args:
+                cc.append(args.pop(0))
+            elif flag == "--include-dir" and args:
+                include_dir = Path(args.pop(0)).resolve()
+            elif flag == "--root" and args:
+                root = Path(args.pop(0)).resolve()
+            else:
+                break
+        else:
+            if cc and include_dir is not None and root is not None:
+                return check_docs(root, cc, include_dir)
+        print(
+            "usage: extract_howto_c_snippets.py --check-docs --root DIR "
+            "--include-dir DIR --cc COMPILER [--cc ARG ...]",
+            file=sys.stderr,
+        )
+        return 2
     if len(sys.argv) != 3:
         print(
-            "usage: extract_howto_c_snippets.py INPUT_MD OUTPUT_C | --self-test",
+            "usage: extract_howto_c_snippets.py INPUT_MD OUTPUT_C | "
+            "--self-test | --check-docs ...",
             file=sys.stderr,
         )
         return 2
