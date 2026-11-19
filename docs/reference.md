@@ -87,8 +87,8 @@ The following calls neither set nor clear `lammpc_last_error()`:
 | `lammpc_last_error` | Reads the current diagnostic buffer without modifying it. |
 | `lammpc_feature_count`, `lammpc_feature_table`, `lammpc_feature_find` | Read-only static feature table queries. |
 
-In the stub build, the library sets a fixed unavailable message, so
-`lammpc_last_error()` only reports that static string and no call clears it.
+In the stub build, `lammpc_last_error()` always returns a fixed read only
+static unavailable string, and no call sets or clears it.
 
 Evaluation functions return `LammpcResult`. `ok` is one on success and zero
 on failure. `message` is always null terminated. On success, it contains

@@ -340,8 +340,8 @@ const char *lammpc_version(void);
  * and the feature table queries (`lammpc_feature_count()`,
  * `lammpc_feature_table()`, `lammpc_feature_find()`).
  *
- * In the stub build, the library sets a fixed unavailable message, so
- * `lammpc_last_error()` only reports that static string and no call clears it.
+ * In the stub build, `lammpc_last_error()` always returns a fixed read-only
+ * static unavailable string, and no call sets or clears it.
  */
 const char *lammpc_last_error(void);
 
