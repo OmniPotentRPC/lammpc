@@ -49,6 +49,7 @@ def extract_c_blocks(
     blocks: list[tuple[int, str]] = []
     active_fence: str | None = None
     in_c_fence = False
+    fence_line = 0
     start_line = 0
     lines: list[str] = []
 
@@ -58,6 +59,7 @@ def extract_c_blocks(
             match = OPEN_FENCE_RE.match(stripped)
             if match is not None:
                 active_fence = match.group("fence")
+                fence_line = lineno
                 info = match.group("info").strip()
                 in_c_fence = bool(C_INFO_RE.match(info))
                 if in_c_fence:
@@ -67,6 +69,7 @@ def extract_c_blocks(
             org_match = ORG_BEGIN_RE.match(stripped)
             if org_match is not None:
                 active_fence = "#+end_src"
+                fence_line = lineno
                 in_c_fence = org_match.group("lang").lower() == "c"
                 if in_c_fence:
                     start_line = lineno + 1
@@ -81,8 +84,9 @@ def extract_c_blocks(
             elif in_c_fence:
                 lines.append(line)
 
-    if active_fence is not None and in_c_fence:
-        raise RuntimeError(f"unclosed ```c fence starting at line {start_line - 1}")
+    if active_fence is not None:
+        kind = "C" if in_c_fence else "non-C"
+        raise RuntimeError(f"unclosed {kind} fence starting at line {fence_line}")
     if not blocks and require_blocks:
         raise RuntimeError("no ```c fences found")
     return blocks
@@ -375,12 +379,29 @@ def run_self_test() -> int:
         else:
             raise AssertionError(f"non-C block unexpectedly extracted: {non_c!r}")
 
+    for unclosed in (
+        "```{.c}\nint x = 0;\n",
+        "```c\nint ok = 0;\n```\n```sh\necho hi\n```c\nint swallowed;\n",
+        "```c\nint ok = 0;\n```\n```sh\necho hi\n",
+        "```c\nint ok = 0;\n```\n~~~text\nplain\n",
+        "```c\nint ok = 0;\n```\n#+begin_src sh\necho hi\n",
+        "```c\nint ok = 0;\n```\n````markdown\n```c\nint x;\n```\n",
+    ):
+        try:
+            extract_c_blocks(unclosed)
+        except RuntimeError as error:
+            if "unclosed" not in str(error):
+                raise AssertionError(f"wrong error for {unclosed!r}: {error}")
+        else:
+            raise AssertionError(f"unclosed fence accepted: {unclosed!r}")
+
     try:
-        extract_c_blocks("```{.c}\nint x = 0;\n")
-    except RuntimeError:
-        pass
+        extract_c_blocks("```c\nint ok = 0;\n```\n```sh\necho hi\n", False)
+    except RuntimeError as error:
+        if "starting at line 4" not in str(error):
+            raise AssertionError(f"unexpected line in error: {error}")
     else:
-        raise AssertionError("unclosed C fence did not raise RuntimeError")
+        raise AssertionError("unclosed sh fence accepted without requirement")
 
     if extract_c_blocks("no code here\n", require_blocks=False):
         raise AssertionError("page without C fences produced blocks")
