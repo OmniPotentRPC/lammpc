@@ -39,6 +39,8 @@ before allocating the result:
 size_t capacity =
     lammpc_potential_result_size_for_force_input(input, input_size);
 void *output = malloc(capacity);
+if (output == NULL)
+  return 1;
 size_t output_size = 0;
 LammpcResult result = lammpc_session_calculate_result(
     session, input, input_size, output, capacity, &output_size);
