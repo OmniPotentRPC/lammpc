@@ -151,6 +151,28 @@ if get_option('with_tests')
     ),
     suite: ['stub', 'docs'],
   )
+  howto_c_snippets_src = custom_target(
+    'howto-c-snippets-src',
+    input: 'docs/how-to.md',
+    output: 'test_docs_api_snippets.c',
+    command: [
+      python,
+      files('tools/extract_howto_c_snippets.py'),
+      '@INPUT@',
+      '@OUTPUT@',
+    ],
+  )
+  test(
+    'docs-api-snippets',
+    executable(
+      'test_docs_api_snippets',
+      howto_c_snippets_src,
+      dependencies: lammpc_shared_dep,
+      include_directories: inc,
+      c_args: common_c_args,
+    ),
+    suite: ['stub', 'docs'],
+  )
   test(
     'stub-abi',
     executable(

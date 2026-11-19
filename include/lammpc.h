@@ -81,11 +81,11 @@ typedef struct LammpcNveObservation {
 } LammpcNveObservation;
 
 /**
- * @brief Apply sticky interaction-model options from a flat `LammpsParams`
- * message (units/pair_style/pair_coeff/type map).
+ * @brief Legacy global-configuration entry point.
  *
- * @return 0 on success, non-zero if the embed shell is unavailable or the
- * message is invalid; details via `lammpc_last_error()`.
+ * The current ABI uses session-scoped configuration only. This function keeps
+ * its symbol for discovery and always fails with details in
+ * `lammpc_last_error()`.
  */
 int lammpc_set_params(const void *params_capnp,
                       size_t params_capnp_size_bytes);
@@ -278,7 +278,8 @@ LammpcResult lammpc_calculate_result_from_config(
  * @brief Byte count needed for a `PotentialResult` for the given `ForceInput`.
  *
  * Parses geometry only; does not create a LAMMPS instance. Returns 0 when the
- * message is invalid or too large for the C ABI.
+ * message is invalid or too large for the C ABI. Does not set or clear
+ * `lammpc_last_error()`.
  */
 size_t lammpc_potential_result_size_for_force_input(
     const void *force_input_capnp, size_t force_input_capnp_size_bytes);
@@ -304,10 +305,37 @@ int lammpc_capabilities_result(void *capabilities_capnp,
 const char *lammpc_version(void);
 
 /**
- * @brief Thread local diagnostic for the most recent embed failure.
+ * @brief Diagnostic string for the calling thread's most recent error-updating
+ * API call.
  *
- * Successful embed calls clear this string. The stub keeps a fixed
- * unavailable message.
+ * In the embed build, returns a non-NULL, NUL-terminated pointer into a
+ * 512-byte thread-local buffer (messages longer than 511 bytes are truncated).
+ * The contents are overwritten or cleared by the next error-updating call on
+ * the same thread, and the buffer lifetime ends when that thread exits; callers
+ * must copy the string if needed and must not free or modify it.
+ *
+ * Session creation (`lammpc_session_create()`,
+ * `lammpc_session_create_from_config()`), configuration
+ * (`lammpc_configure()`, `lammpc_session_set_params()`,
+ * `lammpc_session_configure()`), `LammpcResult` evaluation calls
+ * (`lammpc_session_calculate_result()`, `lammpc_calculate_result()`,
+ * `lammpc_calculate_result_from_config()`, `lammpc_energy()`,
+ * `lammpc_energy_forces()`, `lammpc_energy_gradient()`), MD, NVE,
+ * hard-boundary hook, and `lammpc_session_integrate()` calls store a message
+ * here on failure and clear it to an empty string on success;
+ * `lammpc_set_params()` and the legacy raw-array calls always fail and store
+ * a message.
+ *
+ * `lammpc_hard_boundary_apply()`, `lammpc_capabilities_result()`,
+ * `lammpc_abi_version()`, `lammpc_available()`,
+ * `lammpc_potential_result_size_for_force_input()`, and
+ * `lammpc_session_destroy()` neither set nor clear this buffer. The same
+ * applies to `lammpc_finalize()`, `lammpc_version()`, `lammpc_last_error()`,
+ * and the feature table queries (`lammpc_feature_count()`,
+ * `lammpc_feature_table()`, `lammpc_feature_find()`).
+ *
+ * In the stub build, the library sets a fixed unavailable message, so
+ * `lammpc_last_error()` only reports that static string and no call clears it.
  */
 const char *lammpc_last_error(void);
 

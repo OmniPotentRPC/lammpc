@@ -48,10 +48,47 @@ an error.
 
 ## Return conventions
 
-Functions returning `int` return zero on success and minus one on failure.
-Read the thread local `lammpc_last_error()` immediately after a failure.
-Successful embed calls clear that string. The stub keeps a fixed unavailable
-message.
+Most functions returning `int` return zero on success and minus one on
+failure. `lammpc_hard_boundary_apply()` returns a decision code on success
+(accept, reject, or reflect) or minus one on error. `lammpc_abi_version()` and
+`lammpc_available()` return numeric values directly.
+
+In the embed build, `lammpc_last_error()` returns a nonnull, null terminated
+pointer into a 512 byte thread local buffer (messages longer than 511 bytes are
+truncated). Its contents are overwritten or cleared by the next error updating
+call on the same thread, and the buffer lifetime ends when that thread exits.
+Copy the string if needed before another updating call or thread exit, and do
+not free or modify it.
+
+The functions that set `lammpc_last_error()` on failure and clear it to `""` on
+success in the embed build are `lammpc_configure()`,
+`lammpc_session_create()`, `lammpc_session_create_from_config()`,
+`lammpc_session_set_params()`, `lammpc_session_configure()`,
+`lammpc_session_calculate_result()`, `lammpc_calculate_result()`,
+`lammpc_calculate_result_from_config()`, all `lammpc_session_md_*()` and
+`lammpc_session_nve_*()` functions, `lammpc_session_set_hard_boundary()`,
+`lammpc_session_clear_hard_boundary()`, and `lammpc_session_integrate()`.
+`lammpc_set_params()` and the legacy raw array functions (`lammpc_energy()`,
+`lammpc_energy_forces()`, `lammpc_energy_gradient()`) always fail and store an
+error.
+
+The following calls neither set nor clear `lammpc_last_error()`:
+
+| Function | Reason |
+| --- | --- |
+| `lammpc_hard_boundary_apply` | Pure C callback helper; returns decision code or `-1`. |
+| `lammpc_capabilities_result` | Pure C encoder; returns `0` or `-1` via `*capabilities_capnp_size_bytes`. |
+| `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION` directly. |
+| `lammpc_available` | Returns `1` or `0` directly. |
+| `lammpc_potential_result_size_for_force_input` | Returns byte count or `0` on invalid input. |
+| `lammpc_session_destroy` | Releases session state; returns `void`. |
+| `lammpc_finalize` | No operation; returns `void`. |
+| `lammpc_version` | Returns static version text. |
+| `lammpc_last_error` | Reads the current diagnostic buffer without modifying it. |
+| `lammpc_feature_count`, `lammpc_feature_table`, `lammpc_feature_find` | Read-only static feature table queries. |
+
+In the stub build, the library sets a fixed unavailable message, so
+`lammpc_last_error()` only reports that static string and no call clears it.
 
 Evaluation functions return `LammpcResult`. `ok` is one on success and zero
 on failure. `message` is always null terminated. On success, it contains
@@ -72,7 +109,7 @@ outside the contract.
 | `lammpc_version` | Returns library owned static text. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION`, currently zero. |
 | `lammpc_available` | Returns one for the embed and zero for the stub. |
-| `lammpc_last_error` | Returns thread local diagnostic text. |
+| `lammpc_last_error` | Returns a nonnull pointer to the calling thread's 512 byte error buffer in the embed, or a fixed static string in the stub. |
 | `lammpc_finalize` | No operation in the current ABI. |
 | `lammpc_capabilities_result` | Writes the backend `Capabilities` message. |
 | `lammpc_feature_count` | Returns the number of static feature entries. |
@@ -91,7 +128,7 @@ loaded library. Callers must not free or modify them.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_set_params` | Unsupported by the embed because global parameters are disabled. |
+| `lammpc_set_params` | Legacy global entry point. It is unsupported by the embed because global parameters are disabled. |
 | `lammpc_configure` | Validates a `PotentialConfig` by creating and destroying a temporary session. |
 | `lammpc_session_create` | Creates an idle session from `LammpsParams`. |
 | `lammpc_session_create_from_config` | Creates an idle session from the `lammps` arm. |

@@ -20,8 +20,14 @@ This command configures Meson in `build`, compiles `liblammpc.so`, and runs
 the C test suite. The installed header set consists of `lammpc.h`,
 `lammpc_boundary.h`, and `lammpc_features.h`.
 
-The `public-api-example` test builds and runs `examples/inspect.c`. Run it
-directly after the build with:
+The `public-api-example` test builds and runs `examples/inspect.c`.
+The `docs-api-snippets` test extracts the C snippets from
+[How to use sessions](how-to.md) at build time, compiles and links them
+against `liblammpc.so`, and calls them with dummy and `NULL` inputs so
+renamed API symbols or changed argument lists fail the build. It does not
+execute live LAMMPS sessions or cover other pages such as
+[Hard boundary ABI](hard-boundary.org).
+Run the inspect example directly after the build with:
 
 ```sh
 LD_LIBRARY_PATH=build build/public_api_example
@@ -63,5 +69,6 @@ API.
 
 Call `lammpc_available()` after loading the shared library. A return value of
 one identifies the LAMMPS embed. A return value of zero identifies the stub.
-Both variants expose the same symbols. Evaluation calls on the stub fail and
-explain the failure in `LammpcResult.message` or `lammpc_last_error()`.
+Both variants expose the same symbols. Evaluation and session calls on the stub
+fail with a fixed unavailable message, so `lammpc_last_error()` and
+`LammpcResult.message` only report that message.
