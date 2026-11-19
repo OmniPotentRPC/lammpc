@@ -84,7 +84,9 @@ typedef struct LammpcNveObservation {
  * @brief Legacy global-configuration entry point.
  *
  * The current ABI uses session-scoped configuration only. This function keeps
- * its symbol for discovery and always fails with details in
+ * its symbol for discovery. Both builds ignore both arguments and return -1.
+ * The embed build stores a message saying that global parameters are not
+ * supported in `lammpc_last_error()`. The stub build does not modify
  * `lammpc_last_error()`.
  */
 int lammpc_set_params(const void *params_capnp,

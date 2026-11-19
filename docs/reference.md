@@ -129,7 +129,7 @@ loaded library. Callers must not free or modify them.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_set_params` | Legacy global entry point. It is unsupported by the embed because global parameters are disabled. |
+| `lammpc_set_params` | Legacy global entry point. Both builds ignore both arguments and return `-1`. The embed stores a message saying that global parameters are not supported in `lammpc_last_error()`. The stub does not modify it. |
 | `lammpc_configure` | Validates a `PotentialConfig` by creating and destroying a temporary session. |
 | `lammpc_session_create` | Creates an idle session from `LammpsParams`. |
 | `lammpc_session_create_from_config` | Creates an idle session from the `lammps` arm. |
