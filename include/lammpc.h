@@ -102,8 +102,10 @@ int lammpc_configure(const void *config_capnp,
 /**
  * @brief Legacy raw-array gradient entry point.
  *
- * Positions use angstroms and gradients use Hartree/Bohr. The current embed
- * requires a session and returns `ok = 0`; use
+ * Positions use angstroms and gradients use Hartree/Bohr. Both the embed and
+ * stub builds return `ok = 0` (the embed requires a session and stores an error
+ * in `LammpcResult.message` and `lammpc_last_error()`, while the stub copies
+ * its static unavailable message into `LammpcResult.message`); use
  * `lammpc_session_calculate_result()` instead.
  */
 LammpcResult lammpc_energy_gradient(int n_atoms, const double *positions_ang,
@@ -114,7 +116,8 @@ LammpcResult lammpc_energy_gradient(int n_atoms, const double *positions_ang,
 /**
  * @brief Legacy raw-array energy entry point.
  *
- * The current embed returns `ok = 0`; use a session evaluation instead.
+ * Both the embed and stub builds return `ok = 0`; use
+ * `lammpc_session_calculate_result()` instead.
  */
 LammpcResult lammpc_energy(int n_atoms, const double *positions_ang,
                            const int *atomic_numbers, const void *cell_ang,
@@ -123,8 +126,8 @@ LammpcResult lammpc_energy(int n_atoms, const double *positions_ang,
 /**
  * @brief Legacy raw-array force entry point.
  *
- * Positions use angstroms and forces use Hartree/Bohr. The current embed
- * returns `ok = 0`; use a session evaluation instead.
+ * Positions use angstroms and forces use Hartree/Bohr. Both the embed and stub
+ * builds return `ok = 0`; use `lammpc_session_calculate_result()` instead.
  */
 LammpcResult lammpc_energy_forces(int n_atoms, const double *positions_ang,
                                   const int *atomic_numbers,
@@ -314,17 +317,20 @@ const char *lammpc_version(void);
  * the same thread, and the buffer lifetime ends when that thread exits; callers
  * must copy the string if needed and must not free or modify it.
  *
- * Session creation (`lammpc_session_create()`,
+ * In the embed build, session creation (`lammpc_session_create()`,
  * `lammpc_session_create_from_config()`), configuration
  * (`lammpc_configure()`, `lammpc_session_set_params()`,
- * `lammpc_session_configure()`), `LammpcResult` evaluation calls
+ * `lammpc_session_configure()`), session and one-shot evaluation
  * (`lammpc_session_calculate_result()`, `lammpc_calculate_result()`,
- * `lammpc_calculate_result_from_config()`, `lammpc_energy()`,
- * `lammpc_energy_forces()`, `lammpc_energy_gradient()`), MD, NVE,
- * hard-boundary hook, and `lammpc_session_integrate()` calls store a message
- * here on failure and clear it to an empty string on success;
- * `lammpc_set_params()` and the legacy raw-array calls always fail and store
- * a message.
+ * `lammpc_calculate_result_from_config()`), MD, NVE, hard-boundary hook, and
+ * `lammpc_session_integrate()` calls store a message here on failure and clear
+ * it to an empty string on success. `lammpc_set_params()` and the legacy
+ * raw-array calls (`lammpc_energy()`, `lammpc_energy_forces()`,
+ * `lammpc_energy_gradient()`) always fail in both builds: the embed build
+ * stores an error message here (and in `LammpcResult.message` for the
+ * raw-array calls) and never clears it, while the stub build fails (`ok = 0`
+ * with `LammpcResult.message` copied from the static unavailable string)
+ * without modifying `lammpc_last_error()`.
  *
  * `lammpc_hard_boundary_apply()`, `lammpc_capabilities_result()`,
  * `lammpc_abi_version()`, `lammpc_available()`,
