@@ -326,13 +326,17 @@ const char *lammpc_version(void);
  * (`lammpc_session_calculate_result()`, `lammpc_calculate_result()`,
  * `lammpc_calculate_result_from_config()`), MD, NVE, hard-boundary hook, and
  * `lammpc_session_integrate()` calls store a message here on failure and clear
- * it to an empty string on success. `lammpc_set_params()` and the legacy
- * raw-array calls (`lammpc_energy()`, `lammpc_energy_forces()`,
- * `lammpc_energy_gradient()`) always fail in both builds: the embed build
- * stores an error message here (and in `LammpcResult.message` for the
- * raw-array calls) and never clears it, while the stub build fails (`ok = 0`
- * with `LammpcResult.message` copied from the static unavailable string)
- * without modifying `lammpc_last_error()`.
+ * it to an empty string on success.
+ *
+ * `lammpc_set_params()` and the legacy raw-array calls (`lammpc_energy()`,
+ * `lammpc_energy_forces()`, `lammpc_energy_gradient()`) always fail in both
+ * builds. In the embed build, each stores an error message here and never
+ * clears it; the raw-array calls also copy the message into
+ * `LammpcResult.message`. In the stub build, `lammpc_set_params()` returns -1
+ * and produces no `LammpcResult`, while `lammpc_energy()`,
+ * `lammpc_energy_forces()` and `lammpc_energy_gradient()` return `ok = 0` with
+ * `LammpcResult.message` copied from the static unavailable string. Neither
+ * stub path sets or clears `lammpc_last_error()`.
  *
  * `lammpc_hard_boundary_apply()`, `lammpc_capabilities_result()`,
  * `lammpc_abi_version()`, `lammpc_available()`,

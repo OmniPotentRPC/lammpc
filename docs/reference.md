@@ -69,8 +69,10 @@ success in the embed build are `lammpc_configure()`,
 `lammpc_session_nve_*()` functions, `lammpc_session_set_hard_boundary()`,
 `lammpc_session_clear_hard_boundary()`, and `lammpc_session_integrate()`.
 `lammpc_set_params()` and the legacy raw array functions (`lammpc_energy()`,
-`lammpc_energy_forces()`, `lammpc_energy_gradient()`) always fail and store an
-error.
+`lammpc_energy_forces()`, `lammpc_energy_gradient()`) always fail. In the embed
+build they store an error. In the stub build `lammpc_set_params()` returns `-1`
+and the raw array functions return `ok = 0` with the static unavailable
+message in `LammpcResult.message`; neither sets `lammpc_last_error()`.
 
 The following calls neither set nor clear `lammpc_last_error()`:
 
