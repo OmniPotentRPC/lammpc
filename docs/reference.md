@@ -80,7 +80,7 @@ The following calls neither set nor clear `lammpc_last_error()`:
 | `lammpc_capabilities_result` | Pure C encoder; writes the required byte count to `*capabilities_capnp_size_bytes` and returns `0` on success or `-1` when `capabilities_capnp_size_bytes` is `NULL`, encoding fails, or the output buffer is `NULL` or too small. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION` directly. |
 | `lammpc_available` | Returns `1` or `0` directly. |
-| `lammpc_potential_result_size_for_force_input` | Returns byte count or `0` on invalid input. |
+| `lammpc_potential_result_size_for_force_input` | Returns byte count or `0` on invalid or unrepresentable input in the embed, and always returns `0` in the stub. |
 | `lammpc_session_destroy` | Releases session state; returns `void`. |
 | `lammpc_finalize` | No operation; returns `void`. |
 | `lammpc_version` | Returns static version text. |
@@ -96,7 +96,8 @@ on failure. `message` is always null terminated. On success, it contains
 `lammpc_last_error()` both carry the diagnostic.
 
 Creation functions return `NULL` on failure. The result size query returns
-zero for an invalid `ForceInput` or an unrepresentable size.
+zero for an invalid `ForceInput`, an unrepresentable size, or any call on the
+stub build.
 
 No C function throws a C++ exception across the ABI. As with ordinary C,
 passing a dangling pointer or a buffer smaller than its declared size is
@@ -149,7 +150,7 @@ must be `lammps`.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_potential_result_size_for_force_input` | Returns safe output capacity without creating LAMMPS. |
+| `lammpc_potential_result_size_for_force_input` | Returns safe output capacity without creating LAMMPS in the embed, or `0` in the stub. |
 | `lammpc_session_calculate_result` | Evaluates on a persistent session. |
 | `lammpc_calculate_result` | Creates a temporary session from `LammpsParams`. |
 | `lammpc_calculate_result_from_config` | Creates a temporary session from `PotentialConfig`. |

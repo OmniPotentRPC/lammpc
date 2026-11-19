@@ -280,9 +280,9 @@ LammpcResult lammpc_calculate_result_from_config(
 /**
  * @brief Byte count needed for a `PotentialResult` for the given `ForceInput`.
  *
- * Parses geometry only; does not create a LAMMPS instance. Returns 0 when the
- * message is invalid or too large for the C ABI. Does not set or clear
- * `lammpc_last_error()`.
+ * In the embed build, parses geometry only without creating a LAMMPS instance
+ * and returns 0 when the message is invalid or too large for the C ABI. In the
+ * stub build, always returns 0. Does not set or clear `lammpc_last_error()`.
  */
 size_t lammpc_potential_result_size_for_force_input(
     const void *force_input_capnp, size_t force_input_capnp_size_bytes);
