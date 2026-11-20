@@ -164,21 +164,35 @@ must be `lammps`.
 The evaluation entry points require a nonnull session (except the one-shot
 helpers, which create a temporary session first), valid `ForceInput` bytes, and
 a nonnull `potential_result_capnp_size_bytes` pointer. The `PotentialResult`
-buffer may be `NULL` when probing capacity after a valid `ForceInput` header
-parse. A null session or null size pointer returns failure with
-`invalid arguments` and leaves `*potential_result_capnp_size_bytes`
-unchanged. Otherwise the function zeroes the size output first.
+buffer may be `NULL` when probing capacity once the `ForceInput` has been
+validated as described below.
 
-After the `ForceInput` header, geometry metadata and units parse
-successfully, the embed stores the required flat byte count in the size output before checking
-the result buffer. If `potential_result_capnp` is `NULL` or
-`potential_result_capnp_capacity_bytes` is smaller than that count, the call
-returns failure with `PotentialResult buffer too small` while keeping the
-required count in the size output. On success it copies the encoded message
-and sets the size output to the byte count written. Later geometry or LAMMPS
-failures leave the size output at the required count when one was already
-computed. Invalid `ForceInput` messages, including ones with an unsupported
-`lengthUnit` or `energyUnit`, leave it at zero.
+The size output follows one sequence on all three calls. A null session (on the
+session call) or a null size pointer returns failure with `invalid arguments`
+and leaves `*potential_result_capnp_size_bytes` unchanged. The one-shot calls
+check the size pointer before they create the temporary session, so a null size
+pointer never starts session creation. Once the arguments pass, the size output
+is set to zero, and for the one-shot calls that happens before session
+creation. If the session cannot be created, the call returns that error with
+the size output at zero.
+
+`ForceInput` has no separate header to parse. The required flat byte count is
+written to the size output only after the message has been read, its atom
+count, position count and cell entries have passed the geometry checks, and
+both `lengthUnit` and `energyUnit` have resolved to supported units. A message
+that cannot be read, fails the geometry checks, or names an unsupported
+`lengthUnit` or `energyUnit` therefore returns failure with the size output
+still at zero.
+
+After the required count is stored, a `NULL` result buffer or a
+`potential_result_capnp_capacity_bytes` smaller than that count returns failure
+with `PotentialResult buffer too small` and keeps the required count in the
+size output. A failure while copying the geometry, building or evaluating the
+LAMMPS instance, or encoding the result also keeps the required count. The
+encoding step returns `PotentialResult write failed` when allocating or
+encoding the message fails, and it leaves the size output at the required count
+because the count written replaces it only on success. On success the call
+copies the encoded message and sets the size output to the byte count written.
 
 `lammpc_potential_result_size_for_force_input()` is the usual way to size a
 buffer before allocation because it parses geometry and units without a session or

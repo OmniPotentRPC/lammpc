@@ -88,6 +88,17 @@ static void test_stub_reports_unavailable(void **state) {
   LammpcResult one_shot_config =
       lammpc_calculate_result_from_config(NULL, 0, NULL, 0, NULL, 0, NULL);
   assert_int_equal(one_shot_config.ok, 0);
+  size_t untouched = 99;
+  assert_int_equal(
+      lammpc_session_calculate_result(NULL, NULL, 0, NULL, 0, &untouched).ok,
+      0);
+  assert_int_equal(
+      lammpc_calculate_result(NULL, 0, NULL, 0, NULL, 0, &untouched).ok, 0);
+  assert_int_equal(lammpc_calculate_result_from_config(NULL, 0, NULL, 0, NULL,
+                                                       0, &untouched)
+                       .ok,
+                   0);
+  assert_int_equal(untouched, 99);
   assert_int_equal(lammpc_potential_result_size_for_force_input(NULL, 0), 0);
   const LammpcFeatureEntry *features = lammpc_feature_table();
   assert_non_null(features);

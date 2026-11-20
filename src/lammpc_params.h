@@ -40,7 +40,17 @@ int lammpc_force_input_result_factors(ForceInput_ptr force_input,
 
 size_t lammpc_potential_result_flat_size(size_t force_count);
 
-/** Write energy + forces into a flat `PotentialResult` message. */
+/**
+ * Write energy + forces into a flat `PotentialResult` message.
+ *
+ * Returns -1 and leaves `*potential_result_size_bytes` unchanged when `forces`,
+ * `potential_result_capnp` or the size pointer is NULL, or when `force_count`
+ * exceeds `INT_MAX`. Past those checks the size output is set to the required
+ * flat size from `lammpc_potential_result_flat_size()`, and every further
+ * failure leaves it there: a required size of zero (overflow), a capacity
+ * below the required size, and an allocation or encoding failure all return -1.
+ * Only success replaces it with the byte count written.
+ */
 int lammpc_potential_result_write(double energy, const double *forces,
                                   size_t force_count,
                                   const double *stress_opt,

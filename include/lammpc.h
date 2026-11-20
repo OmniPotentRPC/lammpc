@@ -256,17 +256,21 @@ int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
  * creates fewer or more atoms than requested. An empty
  * `ForceInput.energyUnit` means electronvolt (`eV`).
  *
- * On success, copies the encoded `PotentialResult` and stores the byte count in
- * `*potential_result_capnp_size_bytes`. Requires non-NULL `session` and
- * `potential_result_capnp_size_bytes`. A NULL `session` or NULL size pointer
- * fails with `invalid arguments` without modifying `*potential_result_capnp_size_bytes`.
- * Otherwise the size output is zeroed first. Once the `ForceInput` header,
- * geometry and units parse, it stores the required flat byte count; an
- * unsupported `lengthUnit` or `energyUnit` leaves it at zero. If
- * `potential_result_capnp`
- * is NULL or `potential_result_capnp_capacity_bytes` is smaller than that
- * count, fails with `PotentialResult buffer too small` while leaving the
- * required count in the size output. Prefer
+ * Requires non-NULL `session` and `potential_result_capnp_size_bytes`. A NULL
+ * `session` or NULL size pointer fails with `invalid arguments` without
+ * modifying `*potential_result_capnp_size_bytes`. Otherwise the size output is
+ * zeroed. The required flat byte count is stored only after the `ForceInput`
+ * message is read, its atom, position and cell counts pass the geometry checks
+ * and both `lengthUnit` and `energyUnit` resolve to supported units. Any
+ * earlier failure, including an unsupported unit, leaves the size output at
+ * zero.
+ *
+ * Once the required count is stored, a NULL `potential_result_capnp` or a
+ * `potential_result_capnp_capacity_bytes` smaller than that count fails with
+ * `PotentialResult buffer too small`. That failure, a later geometry, LAMMPS
+ * or `PotentialResult write failed` failure all leave the required count in
+ * the size output. On success the encoded `PotentialResult` is copied and the
+ * size output holds the byte count written. Prefer
  * `lammpc_potential_result_size_for_force_input()` when allocating before a
  * full evaluation. In the stub build, fails without touching the size output.
  */
@@ -279,9 +283,12 @@ LammpcResult lammpc_session_calculate_result(
 /**
  * @brief One-shot params + step.
  *
- * Creates a temporary session, then applies the same `PotentialResult` size
- * output rules as `lammpc_session_calculate_result()`. Session creation failure
- * returns before any size output update.
+ * A NULL `potential_result_capnp_size_bytes` fails with `invalid arguments`
+ * before the session is created. Otherwise the size output is zeroed before
+ * session creation, so a session creation failure returns that error with the
+ * size output at zero. After that it creates a temporary session and applies
+ * the same `PotentialResult` size output rules as
+ * `lammpc_session_calculate_result()`.
  */
 LammpcResult lammpc_calculate_result(const void *params_capnp,
                                      size_t params_capnp_size_bytes,
@@ -294,9 +301,12 @@ LammpcResult lammpc_calculate_result(const void *params_capnp,
 /**
  * @brief One-shot config + step (full `PotentialConfig` resolution).
  *
- * Creates a temporary session, then applies the same `PotentialResult` size
- * output rules as `lammpc_session_calculate_result()`. Session creation failure
- * returns before any size output update.
+ * A NULL `potential_result_capnp_size_bytes` fails with `invalid arguments`
+ * before the session is created. Otherwise the size output is zeroed before
+ * session creation, so a session creation failure returns that error with the
+ * size output at zero. After that it creates a temporary session and applies
+ * the same `PotentialResult` size output rules as
+ * `lammpc_session_calculate_result()`.
  */
 LammpcResult lammpc_calculate_result_from_config(
     const void *config_capnp, size_t config_capnp_size_bytes,
