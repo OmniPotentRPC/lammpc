@@ -1,0 +1,4 @@
+`lammpc_potential_result_size_for_force_input()` now also rejects an unsupported
+`lengthUnit` or `energyUnit` by returning 0, matching the evaluation calls, and
+the size output docs say that units must parse before the required count is
+stored.

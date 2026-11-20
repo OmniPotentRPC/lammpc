@@ -1,0 +1,4 @@
+`lammpc_calculate_result` and `lammpc_calculate_result_from_config` now reject a
+`NULL` `potential_result_capnp_size_bytes` with `invalid arguments` before they
+create a session, and set the size output to zero before session creation, so
+a session creation failure no longer leaves a stale size behind.

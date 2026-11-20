@@ -5,6 +5,7 @@
  */
 #include "lammpc_params.h"
 
+#include <limits.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -159,6 +160,56 @@ static void test_potential_result_write_and_read(void **state) {
   free(buf);
 }
 
+static void test_potential_result_write_failures_keep_required_size(
+    void **state) {
+  (void)state;
+  const double forces[6] = {0.1, 0.2, 0.3, -0.1, -0.2, -0.3};
+  size_t need = lammpc_potential_result_flat_size(6);
+  assert_true(need > 1);
+  unsigned char *buf = (unsigned char *)malloc(need);
+  assert_non_null(buf);
+
+  size_t size = 99;
+  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, NULL, buf,
+                                                 need - 1, &size),
+                   -1);
+  assert_int_equal(size, need);
+
+  size = 99;
+  assert_int_equal(
+      lammpc_potential_result_write(-1.5, forces, 6, NULL, buf, 0, &size), -1);
+  assert_int_equal(size, need);
+
+  size = 99;
+  assert_int_equal(lammpc_potential_result_write(
+                       -1.5, forces, (size_t)INT_MAX + 1u, NULL, buf, need,
+                       &size),
+                   -1);
+  assert_int_equal(size, 99);
+
+  size = 99;
+  assert_int_equal(
+      lammpc_potential_result_write(-1.5, NULL, 6, NULL, buf, need, &size), -1);
+  assert_int_equal(size, 99);
+
+  size = 99;
+  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, NULL, NULL,
+                                                 need, &size),
+                   -1);
+  assert_int_equal(size, 99);
+
+  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, NULL, buf,
+                                                 need, NULL),
+                   -1);
+
+  size = 99;
+  assert_int_equal(lammpc_potential_result_write(-1.5, forces, 6, NULL, buf,
+                                                 need, &size),
+                   0);
+  assert_true(size > 0 && size <= need);
+  free(buf);
+}
+
 static void test_force_input_empty_energy_unit_uses_default_ev(void **state) {
   (void)state;
   struct capn arena;
@@ -205,6 +256,7 @@ int main(void) {
       cmocka_unit_test(test_force_input_geometry_round_trip),
       cmocka_unit_test(test_lammps_params_decode),
       cmocka_unit_test(test_potential_result_write_and_read),
+      cmocka_unit_test(test_potential_result_write_failures_keep_required_size),
       cmocka_unit_test(test_force_input_empty_energy_unit_uses_default_ev),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

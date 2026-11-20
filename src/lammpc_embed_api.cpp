@@ -1437,6 +1437,9 @@ LammpcResult lammpc_calculate_result(const void *params_capnp,
                                      void *potential_result_capnp,
                                      size_t potential_result_capnp_capacity_bytes,
                                      size_t *potential_result_capnp_size_bytes) {
+  if (!potential_result_capnp_size_bytes)
+    return fail_result("invalid arguments");
+  *potential_result_capnp_size_bytes = 0;
   LammpcSession *session =
       lammpc_session_create(params_capnp, params_capnp_size_bytes);
   if (!session)
@@ -1455,6 +1458,9 @@ LammpcResult lammpc_calculate_result_from_config(
     void *potential_result_capnp,
     size_t potential_result_capnp_capacity_bytes,
     size_t *potential_result_capnp_size_bytes) {
+  if (!potential_result_capnp_size_bytes)
+    return fail_result("invalid arguments");
+  *potential_result_capnp_size_bytes = 0;
   LammpcSession *session =
       lammpc_session_create_from_config(config_capnp, config_capnp_size_bytes);
   if (!session)
@@ -1476,7 +1482,12 @@ size_t lammpc_potential_result_size_for_force_input(
     return 0;
   size_t n_atoms = 0;
   int has_cell = 0;
+  double energy_factor = 1.0;
+  double force_factor = 1.0;
   int rc = lammpc_force_input_atom_count(force_input, &n_atoms, &has_cell);
+  if (rc == 0)
+    rc = lammpc_force_input_result_factors(force_input, &energy_factor,
+                                           &force_factor);
   lammpc_params_release(&arena);
   if (rc != 0)
     return 0;

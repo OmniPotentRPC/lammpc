@@ -153,19 +153,55 @@ must be `lammps`.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_potential_result_size_for_force_input` | Returns safe output capacity without creating LAMMPS in the embed, or `0` in the stub. |
-| `lammpc_session_calculate_result` | Evaluates on a persistent session. |
-| `lammpc_calculate_result` | Creates a temporary session from `LammpsParams`. |
-| `lammpc_calculate_result_from_config` | Creates a temporary session from `PotentialConfig`. |
+| `lammpc_potential_result_size_for_force_input` | Returns safe output capacity without creating LAMMPS in the embed, or `0` in the stub. Does not set or clear `lammpc_last_error()`. |
+| `lammpc_session_calculate_result` | Evaluates on a persistent session. Writes `PotentialResult` size output as described below. |
+| `lammpc_calculate_result` | Creates a temporary session from `LammpsParams`, then evaluates with the same size output rules. |
+| `lammpc_calculate_result_from_config` | Creates a temporary session from `PotentialConfig`, then evaluates with the same size output rules. |
 | `lammpc_energy` | Legacy raw array entry point. It fails in current builds. |
 | `lammpc_energy_forces` | Legacy raw array entry point. It fails in current builds. |
 | `lammpc_energy_gradient` | Legacy raw array entry point. It fails in current builds. |
 
-The session evaluation requires nonnull session, input, result buffer, and
-result size output pointers. On a small output buffer, it returns failure and
-stores the required capacity in the size output. Geometry requires at least
-one atom, exactly three positions per atomic number, and either zero or nine
-cell entries.
+The evaluation entry points require a nonnull session (except the one-shot
+helpers, which create a temporary session first), valid `ForceInput` bytes, and
+a nonnull `potential_result_capnp_size_bytes` pointer. The `PotentialResult`
+buffer may be `NULL` when probing capacity once the `ForceInput` has been
+validated as described below.
+
+The size output follows one sequence on all three calls. A null session (on the
+session call) or a null size pointer returns failure with `invalid arguments`
+and leaves `*potential_result_capnp_size_bytes` unchanged. The one-shot calls
+check the size pointer before they create the temporary session, so a null size
+pointer never starts session creation. Once the arguments pass, the size output
+is set to zero, and for the one-shot calls that happens before session
+creation. If the session cannot be created, the call returns that error with
+the size output at zero.
+
+`ForceInput` has no separate header to parse. The required flat byte count is
+written to the size output only after the message has been read, its atom
+count, position count and cell entries have passed the geometry checks, and
+both `lengthUnit` and `energyUnit` have resolved to supported units. A message
+that cannot be read, fails the geometry checks, or names an unsupported
+`lengthUnit` or `energyUnit` therefore returns failure with the size output
+still at zero.
+
+After the required count is stored, a `NULL` result buffer or a
+`potential_result_capnp_capacity_bytes` smaller than that count returns failure
+with `PotentialResult buffer too small` and keeps the required count in the
+size output. A failure while copying the geometry, building or evaluating the
+LAMMPS instance, or encoding the result also keeps the required count. The
+encoding step returns `PotentialResult write failed` when allocating or
+encoding the message fails, and it leaves the size output at the required count
+because the count written replaces it only on success. On success the call
+copies the encoded message and sets the size output to the byte count written.
+
+`lammpc_potential_result_size_for_force_input()` is the usual way to size a
+buffer before allocation because it parses geometry and units without a session or
+LAMMPS instance. The size output on the evaluation calls still reports an
+undersized buffer at call time. In the stub build, evaluation calls fail with
+the fixed unavailable message and do not modify the size output.
+
+Geometry requires at least one atom, exactly three positions per atomic
+number, and either zero or nine cell entries.
 
 Cells use row major restricted triclinic form. Entries 1, 2, and 5 must be
 zero within `1e-12`. Diagonal entries must be positive. Atomic numbers must
