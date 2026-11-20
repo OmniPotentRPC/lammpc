@@ -1,0 +1,4 @@
+Document `PotentialResult` size output behavior on session and one-shot
+evaluation calls in the API headers and reference pages, including NULL
+session handling, buffer-too-small paths, stub semantics, and the preferred
+`lammpc_potential_result_size_for_force_input()` allocation path.

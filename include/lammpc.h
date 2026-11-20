@@ -255,6 +255,18 @@ int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
  * rgpot callers driving dynamics. Geometry setup fails loudly when LAMMPS
  * creates fewer or more atoms than requested. An empty
  * `ForceInput.energyUnit` means electronvolt (`eV`).
+ *
+ * On success, copies the encoded `PotentialResult` and stores the byte count in
+ * `*potential_result_capnp_size_bytes`. Requires non-NULL `session` and
+ * `potential_result_capnp_size_bytes`. A NULL `session` or NULL size pointer
+ * fails with `invalid arguments` without modifying `*potential_result_capnp_size_bytes`.
+ * Otherwise the size output is zeroed first. After a valid `ForceInput` header
+ * parse it stores the required flat byte count. If `potential_result_capnp`
+ * is NULL or `potential_result_capnp_capacity_bytes` is smaller than that
+ * count, fails with `PotentialResult buffer too small` while leaving the
+ * required count in the size output. Prefer
+ * `lammpc_potential_result_size_for_force_input()` when allocating before a
+ * full evaluation. In the stub build, fails without touching the size output.
  */
 LammpcResult lammpc_session_calculate_result(
     LammpcSession *session, const void *force_input_capnp,
@@ -262,7 +274,13 @@ LammpcResult lammpc_session_calculate_result(
     size_t potential_result_capnp_capacity_bytes,
     size_t *potential_result_capnp_size_bytes);
 
-/** @brief One-shot params + step. */
+/**
+ * @brief One-shot params + step.
+ *
+ * Creates a temporary session, then applies the same `PotentialResult` size
+ * output rules as `lammpc_session_calculate_result()`. Session creation failure
+ * returns before any size output update.
+ */
 LammpcResult lammpc_calculate_result(const void *params_capnp,
                                      size_t params_capnp_size_bytes,
                                      const void *force_input_capnp,
@@ -271,7 +289,13 @@ LammpcResult lammpc_calculate_result(const void *params_capnp,
                                      size_t potential_result_capnp_capacity_bytes,
                                      size_t *potential_result_capnp_size_bytes);
 
-/** @brief One-shot config + step (full `PotentialConfig` resolution). */
+/**
+ * @brief One-shot config + step (full `PotentialConfig` resolution).
+ *
+ * Creates a temporary session, then applies the same `PotentialResult` size
+ * output rules as `lammpc_session_calculate_result()`. Session creation failure
+ * returns before any size output update.
+ */
 LammpcResult lammpc_calculate_result_from_config(
     const void *config_capnp, size_t config_capnp_size_bytes,
     const void *force_input_capnp, size_t force_input_capnp_size_bytes,
