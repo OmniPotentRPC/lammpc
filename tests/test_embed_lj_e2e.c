@@ -160,6 +160,7 @@ static size_t make_config(unsigned char *dst, size_t dst_size) {
 }
 
 static size_t make_step_positions_units(const double coordinates[6],
+                                        const char *length_unit,
                                         const char *energy_unit,
                                         unsigned char *dst, size_t dst_size) {
   struct capn arena;
@@ -178,7 +179,8 @@ static size_t make_step_positions_units(const double coordinates[6],
   memset(&view, 0, sizeof(view));
   view.pos = pos;
   view.atmnrs = atmnrs;
-  view.lengthUnit = (capn_text){8, "angstrom", NULL};
+  view.lengthUnit =
+      (capn_text){(int)strlen(length_unit), (char *)length_unit, NULL};
   view.energyUnit =
       (capn_text){(int)strlen(energy_unit), (char *)energy_unit, NULL};
   write_ForceInput(&view, input);
@@ -190,7 +192,8 @@ static size_t make_step_positions_units(const double coordinates[6],
 
 static size_t make_step_positions(const double coordinates[6],
                                   unsigned char *dst, size_t dst_size) {
-  return make_step_positions_units(coordinates, "eV", dst, dst_size);
+  return make_step_positions_units(coordinates, "angstrom", "eV", dst,
+                                   dst_size);
 }
 
 static size_t make_step(double separation_ang, unsigned char *dst,
@@ -545,12 +548,215 @@ static void test_size_query_rejects_unsupported_energy_unit(void **state) {
   (void)state;
   const double coordinates[6] = {0.0, 0.0, 0.0, 2.5, 0.0, 0.0};
   unsigned char step[4096];
-  size_t good = make_step_positions_units(coordinates, "eV", step, sizeof(step));
+  size_t good = make_step_positions_units(coordinates, "angstrom", "eV", step,
+                                sizeof(step));
   assert_true(lammpc_potential_result_size_for_force_input(step, good) > 0);
   size_t bad =
-      make_step_positions_units(coordinates, "furlong", step, sizeof(step));
+      make_step_positions_units(coordinates, "angstrom", "furlong", step,
+                                sizeof(step));
   assert_true(bad > 0);
   assert_int_equal(lammpc_potential_result_size_for_force_input(step, bad), 0);
+}
+
+static const size_t kSizeSentinel = 99;
+
+static void assert_failed_with(LammpcResult result, const char *needle) {
+  assert_int_equal(result.ok, 0);
+  assert_non_null(strstr(result.message, needle));
+  assert_non_null(strstr(lammpc_last_error(), needle));
+}
+
+static void test_session_size_zero_for_unsupported_units(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double coordinates[6] = {0.0, 0.0, 0.0, 2.5, 0.0, 0.0};
+  const char *const cases[2][2] = {{"furlong", "eV"}, {"angstrom", "furlong"}};
+  for (size_t i = 0; i < 2; ++i) {
+    unsigned char step[4096];
+    size_t step_size = make_step_positions_units(
+        coordinates, cases[i][0], cases[i][1], step, sizeof(step));
+    unsigned char out[4096];
+    size_t size = kSizeSentinel;
+    LammpcResult r = lammpc_session_calculate_result(
+        session, step, step_size, out, sizeof(out), &size);
+    assert_failed_with(r, "invalid ForceInput geometry or units");
+    assert_int_equal(size, 0);
+
+    size = kSizeSentinel;
+    r = lammpc_session_calculate_result(session, step, step_size, NULL, 0,
+                                        &size);
+    assert_failed_with(r, "invalid ForceInput geometry or units");
+    assert_int_equal(size, 0);
+  }
+  lammpc_session_destroy(session);
+}
+
+static void test_session_size_zero_for_unreadable_force_input(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const unsigned char junk[3] = {1, 2, 3};
+  unsigned char out[4096];
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_session_calculate_result(
+      session, junk, sizeof(junk), out, sizeof(out), &size);
+  assert_failed_with(r, "invalid ForceInput message");
+  assert_int_equal(size, 0);
+  lammpc_session_destroy(session);
+}
+
+static void test_session_size_reports_required_on_small_buffer(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  unsigned char out[4096];
+  assert_true(need > 1 && need <= sizeof(out));
+
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_session_calculate_result(session, step, step_size,
+                                                   NULL, 0, &size);
+  assert_failed_with(r, "PotentialResult buffer too small");
+  assert_int_equal(size, need);
+
+  size = kSizeSentinel;
+  r = lammpc_session_calculate_result(session, step, step_size, out, need - 1,
+                                      &size);
+  assert_failed_with(r, "PotentialResult buffer too small");
+  assert_int_equal(size, need);
+
+  size = kSizeSentinel;
+  r = lammpc_session_calculate_result(session, step, step_size, out, need,
+                                      &size);
+  assert_int_equal(r.ok, 1);
+  assert_true(size > 0 && size <= need);
+  lammpc_session_destroy(session);
+}
+
+static void test_session_null_size_pointer_is_invalid_arguments(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  unsigned char out[4096];
+  LammpcResult r = lammpc_session_calculate_result(
+      session, step, step_size, out, sizeof(out), NULL);
+  assert_failed_with(r, "invalid arguments");
+  lammpc_session_destroy(session);
+}
+
+static void test_one_shot_size_zero_for_unsupported_units(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  size_t config_size = make_config(config, sizeof(config));
+  const double coordinates[6] = {0.0, 0.0, 0.0, 2.5, 0.0, 0.0};
+  unsigned char step[4096];
+  size_t step_size = make_step_positions_units(coordinates, "angstrom",
+                                               "furlong", step, sizeof(step));
+  unsigned char out[4096];
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_calculate_result_from_config(
+      config, config_size, step, step_size, out, sizeof(out), &size);
+  assert_failed_with(r, "invalid ForceInput geometry or units");
+  assert_int_equal(size, 0);
+}
+
+static void test_one_shot_config_creation_failure_zeroes_size(void **state) {
+  (void)state;
+  unsigned char bad_config[8192];
+  size_t bad_size =
+      make_lj_config_with_units("real", "f f f", bad_config, sizeof(bad_config));
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  unsigned char out[4096];
+
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_calculate_result_from_config(
+      bad_config, bad_size, step, step_size, out, sizeof(out), &size);
+  assert_failed_with(r, "only unitsStyle=metal is supported");
+  assert_int_equal(size, 0);
+
+  r = lammpc_calculate_result_from_config(bad_config, bad_size, step,
+                                          step_size, out, sizeof(out), NULL);
+  assert_failed_with(r, "invalid arguments");
+  assert_null(strstr(lammpc_last_error(), "unitsStyle"));
+}
+
+static void test_one_shot_params_creation_failure_zeroes_size(void **state) {
+  (void)state;
+  unsigned char step[4096];
+  size_t step_size = make_step(3.0, step, sizeof(step));
+  unsigned char out[4096];
+
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_calculate_result(NULL, 0, step, step_size, out,
+                                           sizeof(out), &size);
+  assert_failed_with(r, "invalid LammpsParams message");
+  assert_int_equal(size, 0);
+
+  r = lammpc_calculate_result(NULL, 0, step, step_size, out, sizeof(out),
+                              NULL);
+  assert_failed_with(r, "invalid arguments");
+  assert_null(strstr(lammpc_last_error(), "LammpsParams"));
+}
+
+static void test_one_shot_params_size_zero_for_unsupported_units(void **state) {
+  (void)state;
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  capn_ptr coeffs = capn_new_ptr_list(seg, 1);
+  assert_int_equal(
+      capn_set_text(coeffs, 0, (capn_text){11, "1 1 0.2 2.5", NULL}), 0);
+  capn_list32 type_map = capn_new_list32(seg, 1);
+  capn_set32(type_map, 0, 29);
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.atomStyle = (capn_text){6, "atomic", NULL};
+  pview.pairStyle = (capn_text){11, "lj/cut 10.0", NULL};
+  pview.pairCoeffs = coeffs;
+  pview.typeToAtomicNumber = type_map;
+  pview.newtonPair = 1;
+  pview.boundary = (capn_text){5, "f f f", NULL};
+  write_LammpsParams(&pview, params);
+  unsigned char params_bytes[8192];
+  size_t params_size = write_flat(&arena, params.p, params_bytes,
+                                  sizeof(params_bytes));
+  capn_free(&arena);
+
+  const double coordinates[6] = {0.0, 0.0, 0.0, 2.5, 0.0, 0.0};
+  unsigned char step[4096];
+  size_t step_size = make_step_positions_units(coordinates, "furlong", "eV",
+                                               step, sizeof(step));
+  unsigned char out[4096];
+  size_t size = kSizeSentinel;
+  LammpcResult r = lammpc_calculate_result(params_bytes, params_size, step,
+                                           step_size, out, sizeof(out), &size);
+  assert_failed_with(r, "invalid ForceInput geometry or units");
+  assert_int_equal(size, 0);
 }
 
 static void test_real_units_are_rejected(void **state) {
@@ -1077,6 +1283,14 @@ int main(void) {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
       cmocka_unit_test(test_lj_dimer_one_shot_config),
       cmocka_unit_test(test_real_units_are_rejected),
+      cmocka_unit_test(test_session_size_zero_for_unsupported_units),
+      cmocka_unit_test(test_session_size_zero_for_unreadable_force_input),
+      cmocka_unit_test(test_session_size_reports_required_on_small_buffer),
+      cmocka_unit_test(test_session_null_size_pointer_is_invalid_arguments),
+      cmocka_unit_test(test_one_shot_size_zero_for_unsupported_units),
+      cmocka_unit_test(test_one_shot_config_creation_failure_zeroes_size),
+      cmocka_unit_test(test_one_shot_params_creation_failure_zeroes_size),
+      cmocka_unit_test(test_one_shot_params_size_zero_for_unsupported_units),
       cmocka_unit_test(test_size_query_rejects_unsupported_energy_unit),
       cmocka_unit_test(test_triclinic_plus2a_face_reproducer),
       cmocka_unit_test(test_triclinic_minus1a_face_reproducer),
