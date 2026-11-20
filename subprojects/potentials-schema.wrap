@@ -1,5 +1,5 @@
 [wrap-file]
-directory = potentials-schema-1.15.1
-source_url = https://github.com/OmniPotentRPC/potentials-schema/archive/refs/tags/v1.15.1.tar.gz
-source_filename = potentials-schema-1.15.1.tar.gz
-source_hash = 8913fb509dacbc90d8bdaf6b0bba63f06e8c668256fcf9adb48dc73dfe807935
+directory = potentials-schema-1.16.0
+source_url = https://github.com/OmniPotentRPC/potentials-schema/archive/refs/tags/v1.16.0.tar.gz
+source_filename = potentials-schema-1.16.0.tar.gz
+source_hash = 788a52cdd7dd4ebe58d04a076b4dfdcd1a9adda6ca4f12bbca1698253cbb5fe4
