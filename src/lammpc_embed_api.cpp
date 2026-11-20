@@ -1476,7 +1476,12 @@ size_t lammpc_potential_result_size_for_force_input(
     return 0;
   size_t n_atoms = 0;
   int has_cell = 0;
+  double energy_factor = 1.0;
+  double force_factor = 1.0;
   int rc = lammpc_force_input_atom_count(force_input, &n_atoms, &has_cell);
+  if (rc == 0)
+    rc = lammpc_force_input_result_factors(force_input, &energy_factor,
+                                           &force_factor);
   lammpc_params_release(&arena);
   if (rc != 0)
     return 0;

@@ -169,18 +169,19 @@ parse. A null session or null size pointer returns failure with
 `invalid arguments` and leaves `*potential_result_capnp_size_bytes`
 unchanged. Otherwise the function zeroes the size output first.
 
-After the `ForceInput` header and geometry metadata parse successfully, the
-embed stores the required flat byte count in the size output before checking
+After the `ForceInput` header, geometry metadata and units parse
+successfully, the embed stores the required flat byte count in the size output before checking
 the result buffer. If `potential_result_capnp` is `NULL` or
 `potential_result_capnp_capacity_bytes` is smaller than that count, the call
 returns failure with `PotentialResult buffer too small` while keeping the
 required count in the size output. On success it copies the encoded message
 and sets the size output to the byte count written. Later geometry or LAMMPS
 failures leave the size output at the required count when one was already
-computed. Invalid `ForceInput` messages leave it at zero.
+computed. Invalid `ForceInput` messages, including ones with an unsupported
+`lengthUnit` or `energyUnit`, leave it at zero.
 
 `lammpc_potential_result_size_for_force_input()` is the usual way to size a
-buffer before allocation because it parses geometry without a session or
+buffer before allocation because it parses geometry and units without a session or
 LAMMPS instance. The size output on the evaluation calls still reports an
 undersized buffer at call time. In the stub build, evaluation calls fail with
 the fixed unavailable message and do not modify the size output.

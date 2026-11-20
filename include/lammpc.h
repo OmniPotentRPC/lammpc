@@ -260,8 +260,10 @@ int lammpc_session_nve_state(LammpcSession *session, double *positions_ang,
  * `*potential_result_capnp_size_bytes`. Requires non-NULL `session` and
  * `potential_result_capnp_size_bytes`. A NULL `session` or NULL size pointer
  * fails with `invalid arguments` without modifying `*potential_result_capnp_size_bytes`.
- * Otherwise the size output is zeroed first. After a valid `ForceInput` header
- * parse it stores the required flat byte count. If `potential_result_capnp`
+ * Otherwise the size output is zeroed first. Once the `ForceInput` header,
+ * geometry and units parse, it stores the required flat byte count; an
+ * unsupported `lengthUnit` or `energyUnit` leaves it at zero. If
+ * `potential_result_capnp`
  * is NULL or `potential_result_capnp_capacity_bytes` is smaller than that
  * count, fails with `PotentialResult buffer too small` while leaving the
  * required count in the size output. Prefer
@@ -306,8 +308,9 @@ LammpcResult lammpc_calculate_result_from_config(
 /**
  * @brief Byte count needed for a `PotentialResult` for the given `ForceInput`.
  *
- * In the embed build, parses geometry only without creating a LAMMPS instance
- * and returns 0 when the message is invalid or too large for the C ABI. In the
+ * In the embed build, parses geometry and units without creating a LAMMPS
+ * instance and returns 0 when the message is invalid, names an unsupported
+ * `lengthUnit` or `energyUnit`, or is too large for the C ABI. In the
  * stub build, always returns 0. Does not set or clear `lammpc_last_error()`.
  */
 size_t lammpc_potential_result_size_for_force_input(

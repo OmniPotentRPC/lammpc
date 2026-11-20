@@ -159,8 +159,9 @@ static size_t make_config(unsigned char *dst, size_t dst_size) {
   return make_lj_config("f f f", dst, dst_size);
 }
 
-static size_t make_step_positions(const double coordinates[6],
-                                  unsigned char *dst, size_t dst_size) {
+static size_t make_step_positions_units(const double coordinates[6],
+                                        const char *energy_unit,
+                                        unsigned char *dst, size_t dst_size) {
   struct capn arena;
   capn_init_malloc(&arena);
   struct capn_segment *seg = capn_root(&arena).seg;
@@ -178,12 +179,18 @@ static size_t make_step_positions(const double coordinates[6],
   view.pos = pos;
   view.atmnrs = atmnrs;
   view.lengthUnit = (capn_text){8, "angstrom", NULL};
-  view.energyUnit = (capn_text){2, "eV", NULL};
+  view.energyUnit =
+      (capn_text){(int)strlen(energy_unit), (char *)energy_unit, NULL};
   write_ForceInput(&view, input);
 
   size_t written = write_flat(&arena, input.p, dst, dst_size);
   capn_free(&arena);
   return written;
+}
+
+static size_t make_step_positions(const double coordinates[6],
+                                  unsigned char *dst, size_t dst_size) {
+  return make_step_positions_units(coordinates, "eV", dst, dst_size);
 }
 
 static size_t make_step(double separation_ang, unsigned char *dst,
@@ -532,6 +539,18 @@ static void test_lj_dimer_one_shot_config(void **state) {
   decode_result(out, wrote, &energy, forces);
   free(out);
   assert_true(fabs(energy - lj_energy(3.0)) < 1e-9);
+}
+
+static void test_size_query_rejects_unsupported_energy_unit(void **state) {
+  (void)state;
+  const double coordinates[6] = {0.0, 0.0, 0.0, 2.5, 0.0, 0.0};
+  unsigned char step[4096];
+  size_t good = make_step_positions_units(coordinates, "eV", step, sizeof(step));
+  assert_true(lammpc_potential_result_size_for_force_input(step, good) > 0);
+  size_t bad =
+      make_step_positions_units(coordinates, "furlong", step, sizeof(step));
+  assert_true(bad > 0);
+  assert_int_equal(lammpc_potential_result_size_for_force_input(step, bad), 0);
 }
 
 static void test_real_units_are_rejected(void **state) {
@@ -1058,6 +1077,7 @@ int main(void) {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
       cmocka_unit_test(test_lj_dimer_one_shot_config),
       cmocka_unit_test(test_real_units_are_rejected),
+      cmocka_unit_test(test_size_query_rejects_unsupported_energy_unit),
       cmocka_unit_test(test_triclinic_plus2a_face_reproducer),
       cmocka_unit_test(test_triclinic_minus1a_face_reproducer),
       cmocka_unit_test(test_orthogonal_nextafter_2l_reproducer),
