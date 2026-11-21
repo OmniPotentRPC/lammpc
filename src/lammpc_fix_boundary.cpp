@@ -11,6 +11,7 @@
 #include "lammpc_boundary_embed.h"
 
 #include "atom.h"
+#include "compute.h"
 #include "domain.h"
 #include "error.h"
 #include "fix.h"
@@ -97,17 +98,18 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
     if (decision < 0) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   1);
+      refresh_state();
       capture_previous();
       error->all(FLERR, "lammpc hard boundary callback failed");
     }
     if (decision == LAMMPC_BOUNDARY_REJECT) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   1);
-      update->integrate->setup_minimal(1);
+      refresh_state();
     } else if (decision == LAMMPC_BOUNDARY_REFLECT) {
       write_atoms(n_atoms, local_of_tag, positions.data(), velocities.data(),
                   0);
-      update->integrate->setup_minimal(1);
+      refresh_state();
     }
     capture_previous();
   }
@@ -177,6 +179,20 @@ class FixLammpcBoundary : public LAMMPS_NS::Fix {
       if (restore_images)
         atom->image[local] = previous_images_[static_cast<size_t>(caller)];
     }
+  }
+
+  void refresh_state() const {
+    for (auto *compute : modify->get_compute_list()) {
+      compute->invoked_flag = LAMMPS_NS::Compute::INVOKED_NONE;
+      compute->invoked_scalar = -1;
+      compute->invoked_vector = -1;
+      compute->invoked_array = -1;
+      compute->invoked_peratom = -1;
+      compute->invoked_local = -1;
+      compute->invoked_pergrid = -1;
+    }
+    modify->addstep_compute_all(update->ntimestep);
+    update->integrate->setup_minimal(1);
   }
 
   void capture_previous() {

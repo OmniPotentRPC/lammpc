@@ -187,7 +187,10 @@ int lammpc_session_md_initialize(
  * post-step MD positions once per step. A reflected position is projected
  * back to the configured plane and its force is re-evaluated. A rejected
  * iteration restores the accepted state but retains the consumed Langevin
- * draws, and it counts as a successful md_step iteration.
+ * draws, and it counts as a successful md_step iteration. An invalid
+ * callback decision or a failed force evaluation rolls back that step's
+ * state and RNG before returning -1 (and marks MD uninitialized if LAMMPS
+ * lost atoms during the failed evaluation).
  */
 int lammpc_session_md_step(LammpcSession *session, size_t step_count);
 
