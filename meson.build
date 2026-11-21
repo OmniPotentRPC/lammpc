@@ -300,18 +300,30 @@ if get_option('with_tests')
       suite: ['e2e'],
       timeout: 180,
     )
+    boundary_threads_e2e = executable(
+      'test_embed_boundary_threads_e2e',
+      ['tests/test_embed_boundary_threads_e2e.cpp'] + lammpc_params_sources +
+      lammpc_embed_companion_sources,
+      dependencies: [cmocka_dep, dependency('threads')] + lammpc_params_deps +
+                    lammpc_backend_deps,
+      include_directories: [inc] + lammpc_params_includes,
+      c_args: common_c_args,
+      cpp_args: ['-std=c++17'],
+    )
+    # GCC's ThreadSanitizer aborts with exit 66 ("unexpected memory mapping")
+    # when ASLR places the PIE image or a library outside its fixed shadow.
+    # In this toolchain that re-exec is Android-only, so the Linux test is
+    # started with address-space randomization off. Detection is unchanged.
+    boundary_threads_prog = boundary_threads_e2e
+    boundary_threads_args = []
+    if 'thread' in get_option('b_sanitize')
+      boundary_threads_prog = find_program('setarch')
+      boundary_threads_args = [host_machine.cpu(), '-R', boundary_threads_e2e]
+    endif
     test(
       'embed-boundary-threads-e2e',
-      executable(
-        'test_embed_boundary_threads_e2e',
-        ['tests/test_embed_boundary_threads_e2e.cpp'] + lammpc_params_sources +
-        lammpc_embed_companion_sources,
-        dependencies: [cmocka_dep, dependency('threads')] + lammpc_params_deps +
-                      lammpc_backend_deps,
-        include_directories: [inc] + lammpc_params_includes,
-        c_args: common_c_args,
-        cpp_args: ['-std=c++17'],
-      ),
+      boundary_threads_prog,
+      args: boundary_threads_args,
       env: lammps_root_env,
       suite: ['e2e', 'thread'],
       timeout: 180,
