@@ -88,6 +88,8 @@ struct Capabilities {
   dlpackMajor    @15 :UInt16; # DLPack callback major revision.
   dlpackMinor    @16 :UInt16; # DLPack callback minor revision.
   bridgeFeatures @17 :UInt64; # eindir bridge feature bitset.
+  buildVersion   @18 :Text; # Version of the build that produced this message; empty when unknown.
+  buildRevision  @19 :Text; # Source revision of that build (e.g. a git commit); empty when unknown.
 
   enum Operation {
     energy         @0;
@@ -1362,6 +1364,7 @@ struct CPMDSystemSection {
   classicalCellDegree @88 :Bool = false;   # CLASSICAL CELL DEGREE.
   cellVectors @89 :Bool = false;            # CELL VECTORS.
   referenceCellVectors @90 :Bool = false;   # REFERENCE CELL VECTORS.
+  hasCharge @91 :Bool = false;              # @brief Mark CPMDSystemSection.charge as explicit, including zero.
 }
 
 struct CPMDCpmdSection {
@@ -1899,6 +1902,7 @@ struct CPMDParams {
   enginePath   @10 :Text = "";        # Frontend engine selection hint.
   inputBlocks  @11 :List(Text);       # Raw &SECTION blocks applied before generated ones.
   inputSections @12 :List(CPMDInputSection); # Structured CPMD input sections.
+  hasCharge @13 :Bool = false;        # @brief Mark CPMDParams.charge as explicit, including zero.
   # Long-tail options: use CPMDInputSection.raw, inputBlocks, or set.
 }
 
@@ -1924,6 +1928,7 @@ struct CommonMethodSpec {
   relativityMethod  @10 :Text = "";    # e.g. "ZORA", "DKH".
   vanDerWaalsS6     @11 :Float64 = 0.0; # Global dispersion scaling s6; 0 = engine default.
                                         # Lowers to dft:vdw (NWChem) / vdwParams.s6 (CPMD).
+  hasCharge @12 :Bool = false;         # @brief Mark CommonMethodSpec.charge as explicit, including zero.
 
   struct Smearing {
     kind    @0 :Kind = none;
@@ -1960,6 +1965,29 @@ struct MetatomicParams {
     perAtom           @1 :Bool = false;
     explicitGradients @2 :List(Text); # Gradient names, e.g. "positions", "strain".
   }
+
+  # Tensor runtime, applied once when the engine creates the model. A value
+  # below 1 leaves the runtime's own setting alone.
+  intraopThreads @7 :Int32 = 1;  # torch intra-op worker threads.
+  interopThreads @8 :Int32 = 1;  # torch inter-op worker threads (settable once per process).
+
+  # Mirrors rgpot's MetatomicConfig. 0 / false keep the model's own behaviour.
+  nSymmetryRotations @9  :Int64 = 0;  # Rotations averaged per evaluation; 0 disables.
+  randomRotation     @10 :Bool = false; # Draw the averaging rotations at random.
+  so3ProbeScatter    @11 :Bool = false; # Probe the SO(3) scatter path.
+  torchDeterminism   @12 :TorchDeterminism = fast;
+
+  lengthUnit @13 :Text = "angstrom";
+  enginePath @14 :Text;
+  taskName @15 :Text;
+  charge @16 :Int32 = 0;
+  spin @17 :Int32 = 1;
+  attachSystemExtras @18 :Bool = false;
+
+  enum TorchDeterminism {
+    fast          @0; # Leave the process-global torch flags alone.
+    deterministic @1; # Deterministic algorithms, math SDP attention, no TF32.
+  }
 }
 
 # @struct UmaParams
@@ -1975,6 +2003,73 @@ struct UmaParams {
   spin         @4 :Int32 = 1;     # Spin multiplicity.
   cutoff       @5 :Float64 = 0.0; # Angstrom; <=0 keeps UmaConfig/sidecar value.
   maxNeighbors @6 :Int32 = 0;     # <=0 keeps UmaConfig/sidecar value.
+
+  # Tensor runtime, applied once when the engine creates the model. A thread
+  # count below 1 leaves the runtime's own setting alone.
+  intraopThreads          @7 :Int32 = 1; # torch intra-op worker threads.
+  interopThreads          @8 :Int32 = 1; # torch inter-op worker threads (settable once per process).
+  deterministicAlgorithms @9 :Bool = false; # Request deterministic torch algorithms.
+}
+
+# @struct PotentialSpec
+# @brief One backend, named and configured, as a value that can be carried
+# inside another backend's configuration.
+#
+# Backend selection is otherwise a property of which engine library a host
+# dlopens, which works while a potential is a leaf. A learning surrogate is
+# not a leaf: it wraps an oracle and has to say which one and how it is
+# configured, so the choice has to travel on the wire rather than in the
+# host's loader. This is that value, one arm per params struct already in
+# this file.
+#
+# Purely additive: no existing field is renumbered, so a reader that does
+# not know this struct is unaffected.
+struct PotentialSpec {
+  union {
+    nwchem     @0 :NWChemParams;
+    cpmd       @1 :CPMDParams;
+    metatomic  @2 :MetatomicParams;
+    uma        @3 :UmaParams;
+    lammps     @4 :LammpsParams;
+    # Backends whose configuration is entirely a library path plus the
+    # geometry on ForceInput carry no params struct of their own.
+    builtin    @5 :BuiltinParams;
+  }
+}
+
+# @struct BuiltinParams
+# @brief Arm for backends configured by name alone (analytic potentials and
+# the dlopen-only engines), so PotentialSpec can name them without inventing
+# a params struct that would hold one field.
+struct BuiltinParams {
+  name @0 :Text;   # e.g. "lj", "cuh2", "xtb", "morse".
+  library @1 :Text = "";  # Optional explicit engine library path.
+  config @2 :PotentialConfig; # Native constructor settings for the named backend.
+}
+
+# @struct GprParams
+# @brief Learning-surrogate arm: a Gaussian process that answers where its
+# posterior is resolved and calls an oracle where it is not.
+#
+# The oracle is a nested PotentialSpec rather than a callback, so a host that
+# selects this backend does not also have to supply ground truth through a
+# side channel. That is the difference between an engine eOn can load and one
+# eOn can use: its GenericEngineLoader resolves create/destroy/force and never
+# calls set_callbacks, so an engine that expects its oracle by callback gets
+# none.
+#
+# The gate is two-sided and stated in multiples of the model's own likelihood
+# noise rather than in absolute energy, so it transfers across systems.
+struct GprParams {
+  oracle @0 :PotentialSpec;        # Ground truth. Required.
+  sigmaLoFactor @1 :Float64 = 1.0;  # Answer from the model below this * sigma.
+  sigmaHiFactor @2 :Float64 = 20.0; # Above this * sigma, do not learn the row.
+  # A predicted force magnitude under this (eV/Angstrom) forces a
+  # ground-truth call, so a driver's convergence claim is checked rather
+  # than trusted. Non-positive disables the certificate, which leaves a
+  # driver free to converge on the surrogate's own minimum.
+  certifyBelowForce @3 :Float64 = 0.0;
+  refitTrainingRevisions @4 :UInt64 = 5;  # Refit cadence in appends.
 }
 
 # @struct LammpsParams
@@ -2415,6 +2510,93 @@ struct NWChemCdftSpec {
   }
 }
 
+# Native constructor settings use the same defaults as rgpot's C++ configs.
+# Geometry, species and units remain on ForceInput.
+struct LennardJonesParams {
+  u0 @0 :Float64 = 1.0;
+  psi @1 :Float64 = 1.0;
+  cutoff @2 :Float64 = 15.0;
+}
+
+struct MorseParams {
+  de @0 :Float64 = 0.7102;
+  a @1 :Float64 = 1.6047;
+  re @2 :Float64 = 2.897;
+  cutoff @3 :Float64 = 9.5;
+}
+
+struct ZBLParams {
+  cutInner @0 :Float64 = 2.0;
+  cutGlobal @1 :Float64 = 2.5;
+}
+
+struct XTBParams {
+  method @0 :Text = "gfn2"; # gfn0, gfn1, gfn2 or gfnff.
+  accuracy @1 :Float64 = 1.0;
+  electronicTemperature @2 :Float64 = 300.0; # Kelvin.
+  maxIterations @3 :Int32 = 250;
+  charge @4 :Float64 = 0.0;
+  uhf @5 :Int32 = 0;
+}
+
+struct TBLiteParams {
+  method @0 :Text = "gfn2"; # gfn1, gfn2 or ipea1.
+  accuracy @1 :Float64 = 1.0;
+  electronicTemperature @2 :Float64 = 300.0; # Kelvin.
+  maxIterations @3 :Int32 = 250;
+  charge @4 :Float64 = 0.0;
+  uhf @5 :Int32 = 0;
+}
+
+struct D3Params {
+  functional @0 :Text = "pbe";
+  damping @1 :Text = "bj"; # bj or zero.
+  atm @2 :Bool = true;
+}
+
+struct D4Params {
+  functional @0 :Text = "pbe";
+  charge @1 :Float64 = 0.0;
+  atm @2 :Bool = true;
+}
+
+struct MOPACParams {
+  charge @0 :Int32 = 0;
+  spin @1 :Int32 = 0; # Spin excitations, not multiplicity.
+  model @2 :Int32 = 4; # AM1.
+  tolerance @3 :Float64 = 1.0;
+  maxTime @4 :Int32 = 3600;
+  enginePath @5 :Text;
+}
+
+struct SkalaParams {
+  xc @0 :Text = "skala-1.1";
+  basis @1 :Text = "def2-tzvp";
+  charge @2 :Int32 = 0;
+  multiplicity @3 :Int32 = 1;
+  enginePath @4 :Text;
+  nwchemRoot @5 :Text;
+}
+
+# A named term may contain another expression or a configured leaf.
+struct ExprTerm {
+  name @0 :Text;
+  pot @1 :PotSpec;
+}
+
+struct ExprParams {
+  expression @0 :Text;
+  terms @1 :List(ExprTerm);
+}
+
+struct PotSpec {
+  union {
+    expr @0 :ExprParams;
+    none @1 :Void;
+    potential @2 :PotentialSpec;
+  }
+}
+
 # @struct PotentialConfig
 # @brief **rgpot user parameters (extensible, in/out via Cap'n Proto only).**
 #
@@ -2433,8 +2615,17 @@ struct PotentialConfig {
     cpmd      @2 :CPMDParams;   # CPMDPot / potserv ... OpenCPMD
     metatomic @4 :MetatomicParams; # MetatomicPot (torch ML models)
     lammps    @5 :LammpsParams;    # lammpc dynlib shim (LAMMPS library API)
-    # xtb       @6 :XTBParams;
-    # tblite    @7 :TBLiteParams;
+    xtb       @6 :XTBParams;
+    tblite    @7 :TBLiteParams;
+    uma       @8 :UmaParams;
+    lj        @9 :LennardJonesParams; # LJPot or LJClusterPot, selected by name.
+    morse     @10 :MorseParams;
+    zbl       @11 :ZBLParams;
+    d3        @12 :D3Params;
+    d4        @13 :D4Params;
+    mopac     @14 :MOPACParams;
+    skala     @15 :SkalaParams;
+    expr      @16 :ExprParams;
   }
   # Normalized overlay applied BEFORE the native arm; native settings win.
   common @3 :CommonMethodSpec;
@@ -2491,4 +2682,9 @@ interface Potential {
   # @brief Compute potential energy and nuclear gradient for this geometry.
   # @return PotentialResult.energy and PotentialResult.gradient.
   calculateGradient @11 (fip :ForceInput) -> (result :PotentialResult);
+
+  # @brief Capabilities of this server, read before any calculate call.
+  # @return The protocol, schema, eindir bridge, DLPack and build identity.
+  # buildVersion and buildRevision are empty when the build does not know them.
+  getCapabilities @12 () -> (capabilities :Capabilities);
 }
