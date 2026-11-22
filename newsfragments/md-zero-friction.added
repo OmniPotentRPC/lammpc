@@ -1,2 +1,0 @@
-Constrained MD accepts zero friction and integrates that choice as projected
-velocity Verlet. A zero-step call leaves an initialized session unchanged.

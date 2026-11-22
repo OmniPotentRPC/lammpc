@@ -4,7 +4,7 @@ channels = ["conda-forge"]
 description = "C ABI for embedding LAMMPS with Cap'n Proto parameters."
 name = "lammpc"
 platforms = ["linux-64", "osx-64", "osx-arm64"]
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies]
 capnproto = ">=1.0.2,<2"
