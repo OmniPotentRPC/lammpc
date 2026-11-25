@@ -1,0 +1,3 @@
+The repository now ships CITATION.cff, codemeta.json, and .zenodo.json so
+that citation tools and archives can read the author, version, license, and
+release date of lammpc.
