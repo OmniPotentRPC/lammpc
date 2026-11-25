@@ -1,0 +1,55 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "lammpc",
+  "description": "C ABI for embedding LAMMPS with Cap'n Proto parameters.",
+  "version": "0.2.0",
+  "softwareVersion": "0.2.0",
+  "datePublished": "2026-11-22",
+  "license": "https://spdx.org/licenses/MIT",
+  "codeRepository": "https://github.com/OmniPotentRPC/lammpc",
+  "issueTracker": "https://github.com/OmniPotentRPC/lammpc/issues",
+  "programmingLanguage": [
+    "C",
+    "C++"
+  ],
+  "runtimePlatform": [
+    "linux-64",
+    "osx-64",
+    "osx-arm64"
+  ],
+  "keywords": [
+    "LAMMPS",
+    "C ABI",
+    "Cap'n Proto",
+    "molecular dynamics",
+    "Langevin dynamics",
+    "NVE dynamics",
+    "hard boundaries"
+  ],
+  "author": [
+    {
+      "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-2393-8056",
+      "givenName": "Rohit",
+      "familyName": "Goswami",
+      "email": "rgoswami@ieee.org",
+      "affiliation": {
+        "@type": "Organization",
+        "name": "TurtleTech ehf"
+      }
+    }
+  ],
+  "maintainer": [
+    {
+      "@type": "Person",
+      "@id": "https://orcid.org/0000-0002-2393-8056",
+      "givenName": "Rohit",
+      "familyName": "Goswami",
+      "email": "rgoswami@ieee.org"
+    }
+  ],
+  "readme": "https://github.com/OmniPotentRPC/lammpc/blob/main/README.md",
+  "releaseNotes": "https://github.com/OmniPotentRPC/lammpc/blob/main/CHANGELOG.md",
+  "developmentStatus": "active"
+}

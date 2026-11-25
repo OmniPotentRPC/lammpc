@@ -1,0 +1,31 @@
+{
+  "title": "lammpc",
+  "description": "lammpc is a C ABI for evaluating LAMMPS interaction models in process. It uses flat Cap'n Proto messages from potentials-schema. The library provides persistent sessions, projected Langevin dynamics, unconstrained NVE dynamics, and host callbacks for hard boundaries.",
+  "upload_type": "software",
+  "version": "0.2.0",
+  "publication_date": "2026-11-22",
+  "license": "MIT",
+  "creators": [
+    {
+      "name": "Goswami, Rohit",
+      "affiliation": "TurtleTech ehf",
+      "orcid": "0000-0002-2393-8056"
+    }
+  ],
+  "keywords": [
+    "LAMMPS",
+    "C ABI",
+    "Cap'n Proto",
+    "molecular dynamics",
+    "Langevin dynamics",
+    "NVE dynamics",
+    "hard boundaries"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/OmniPotentRPC/lammpc",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}
