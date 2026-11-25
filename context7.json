@@ -1,0 +1,35 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "lammpc",
+  "description": "C ABI for evaluating LAMMPS models in process.",
+  "folders": [
+    "docs",
+    "examples",
+    "include"
+  ],
+  "excludeFolders": [
+    "docs/source",
+    "docs/build",
+    "docs/newsfragments",
+    "newsfragments",
+    "changelog.d",
+    "benches",
+    "benchmarks",
+    "bench",
+    "benchflow",
+    "subprojects",
+    "third_party",
+    "tests",
+    "scripts",
+    "ci",
+    ".github",
+    "branding",
+    ".pixi"
+  ],
+  "excludeFiles": [
+    "CHANGELOG.md",
+    "CODE_OF_CONDUCT.md",
+    "LICENSE"
+  ],
+  "rules": []
+}
