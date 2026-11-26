@@ -1823,6 +1823,49 @@ static void test_reused_session_honors_atomic_numbers(void **state) {
   assert_true(fabs(energy_reused - energy_copper) > 0.1);
 }
 
+static void test_failed_md_reinit_stops_later_steps(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const double zero_normal[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.001,
+      .thermal_energy_ev = 0.05,
+      .friction_per_ps = 0.0,
+      .seed = 7,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL, 6,
+                                           &observation),
+                   0);
+  assert_int_equal(observation.steps, 1);
+
+  assert_int_equal(lammpc_session_md_initialize(session, step, step_size, point,
+                                                zero_normal, 6, &controls),
+                   -1);
+  assert_string_equal(lammpc_last_error(), "plane normal vanishes");
+  assert_int_not_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL,
+                                               6, &observation),
+                       0);
+  assert_int_not_equal(lammpc_session_md_step(session, 1), 0);
+  lammpc_session_destroy(session);
+}
+
 static void test_extra_setup_cannot_change_atom_count(void **state) {
   (void)state;
   const char *coeffs[] = {"1 1 1.0 1.0"};
@@ -1884,6 +1927,7 @@ int main(void) {
       cmocka_unit_test(test_overlay_rejected),
       cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
       cmocka_unit_test(test_reused_session_honors_atomic_numbers),
+      cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

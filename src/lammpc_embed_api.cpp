@@ -1061,6 +1061,8 @@ int lammpc_session_md_initialize(
                      cell_ang, has_cell) != 0)
     return -1;
 
+  /* A failed reinit must not leave the previous trajectory runnable. */
+  session->md_ready = false;
   session->md_config = *config;
   session->md_point.assign(point, point + coordinate_count);
   session->md_normal.assign(normal, normal + coordinate_count);
