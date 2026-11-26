@@ -1879,7 +1879,13 @@ LammpcResult lammpc_energy_forces(int, const double *, const int *, const void *
   return fail_result("lammpc: raw-array calls need a session");
 }
 
-const char *lammpc_version(void) { return "lammpc/api"; }
+#ifndef LAMMPC_VERSION_STRING
+#define LAMMPC_VERSION_STRING "unknown"
+#endif
+
+const char *lammpc_version(void) {
+  return "lammpc/" LAMMPC_VERSION_STRING;
+}
 int lammpc_abi_version(void) { return LAMMPC_ABI_VERSION; }
 int lammpc_available(void) { return 1; }
 void lammpc_finalize(void) {}

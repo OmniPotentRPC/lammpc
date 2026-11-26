@@ -109,7 +109,7 @@ outside the contract.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_version` | Returns library owned static text. |
+| `lammpc_version` | Returns library owned static text. The embed string is `lammpc/` plus the project version. The stub string is `lammpc-stub/` plus that version. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION`, currently zero. |
 | `lammpc_available` | Returns one for the embed and zero for the stub. |
 | `lammpc_last_error` | Returns a nonnull pointer to the calling thread's 512 byte error buffer in the embed, or a fixed static string in the stub. |
