@@ -1645,6 +1645,158 @@ static void test_overlay_rejected(void **state) {
   assert_int_not_equal(lammpc_configure(buf, written), 0);
 }
 
+static size_t make_typed_config(const char *pair_style, const char **coeffs,
+                                int n_coeffs, const int *type_z, int n_types,
+                                const double *masses, int n_masses,
+                                const char **extra, int n_extra,
+                                const char *boundary, unsigned char *dst,
+                                size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  capn_ptr coeff_list = capn_new_ptr_list(seg, n_coeffs);
+  for (int i = 0; i < n_coeffs; ++i) {
+    capn_text text = {(int)strlen(coeffs[i]), (char *)coeffs[i], NULL};
+    assert_int_equal(capn_set_text(coeff_list, i, text), 0);
+  }
+  capn_list32 type_map = capn_new_list32(seg, n_types);
+  for (int i = 0; i < n_types; ++i)
+    capn_set32(type_map, i, type_z[i]);
+
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.atomStyle = (capn_text){6, "atomic", NULL};
+  pview.pairStyle =
+      (capn_text){(int)strlen(pair_style), (char *)pair_style, NULL};
+  pview.pairCoeffs = coeff_list;
+  pview.typeToAtomicNumber = type_map;
+  pview.newtonPair = 1;
+  pview.boundary =
+      (capn_text){(int)strlen(boundary), (char *)boundary, NULL};
+  if (n_masses > 0) {
+    capn_list64 mass_list = capn_new_list64(seg, n_masses);
+    for (int i = 0; i < n_masses; ++i)
+      capn_set64(mass_list, i, capn_from_f64(masses[i]));
+    pview.masses = mass_list;
+  }
+  if (n_extra > 0) {
+    capn_ptr setup = capn_new_ptr_list(seg, n_extra);
+    for (int i = 0; i < n_extra; ++i) {
+      capn_text text = {(int)strlen(extra[i]), (char *)extra[i], NULL};
+      assert_int_equal(capn_set_text(setup, i, text), 0);
+    }
+    pview.extraSetup = setup;
+  }
+  write_LammpsParams(&pview, params);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  write_PotentialConfig(&cview, config);
+
+  size_t written = write_flat(&arena, config.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static size_t make_geometry_step(const double *coords, const int *z,
+                                 int n_atoms, const double *box9,
+                                 unsigned char *dst, size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  ForceInput_ptr input = new_ForceInput(seg);
+  capn_list64 pos = capn_new_list64(seg, n_atoms * 3);
+  for (int i = 0; i < n_atoms * 3; ++i)
+    capn_set64(pos, i, capn_from_f64(coords[i]));
+  capn_list32 atmnrs = capn_new_list32(seg, n_atoms);
+  for (int i = 0; i < n_atoms; ++i)
+    capn_set32(atmnrs, i, z[i]);
+
+  struct ForceInput view;
+  memset(&view, 0, sizeof(view));
+  view.pos = pos;
+  view.atmnrs = atmnrs;
+  if (box9) {
+    capn_list64 box = capn_new_list64(seg, 9);
+    for (int i = 0; i < 9; ++i)
+      capn_set64(box, i, capn_from_f64(box9[i]));
+    view.box = box;
+  }
+  view.lengthUnit = (capn_text){8, "angstrom", NULL};
+  view.energyUnit = (capn_text){2, "eV", NULL};
+  write_ForceInput(&view, input);
+
+  size_t written = write_flat(&arena, input.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static LammpcResult calculate_on_session(LammpcSession *session,
+                                         const unsigned char *step,
+                                         size_t step_size, double *energy,
+                                         double *forces, int n_forces) {
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  unsigned char *out = (unsigned char *)malloc(need);
+  assert_non_null(out);
+  size_t wrote = 0;
+  LammpcResult result = lammpc_session_calculate_result(
+      session, step, step_size, out, need, &wrote);
+  if (result.ok) {
+    struct capn arena;
+    assert_int_equal(capn_init_mem(&arena, out, wrote, 0), 0);
+    PotentialResult_ptr decoded;
+    decoded.p = capn_getp(capn_root(&arena), 0, 1);
+    assert_int_equal(decoded.p.type, CAPN_STRUCT);
+    struct PotentialResult view;
+    read_PotentialResult(&view, decoded);
+    if (energy)
+      *energy = view.energy;
+    if (forces) {
+      capn_resolve(&view.forces.p);
+      assert_int_equal(view.forces.p.len, n_forces);
+      for (int i = 0; i < n_forces; ++i)
+        forces[i] = capn_to_f64(capn_get64(view.forces, i));
+    }
+    capn_free(&arena);
+  }
+  free(out);
+  return result;
+}
+
+static void test_extra_setup_cannot_change_atom_count(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0"};
+  const int type_z[] = {29};
+  const double masses[] = {63.546};
+  const char *extra[] = {"create_atoms 1 single 4.0 4.0 4.0"};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 1, type_z, 1, masses, 1, extra,
+                        1, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int z[2] = {29, 29};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, z, 2, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, NULL, NULL, 0);
+  lammpc_session_destroy(session);
+  assert_int_equal(result.ok, 0);
+  assert_non_null(strstr(result.message, "atom count"));
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
@@ -1678,6 +1830,7 @@ int main(void) {
       cmocka_unit_test(test_early_returns_refresh_last_error),
       cmocka_unit_test(test_calculate_result_null_refreshes_last_error),
       cmocka_unit_test(test_overlay_rejected),
+      cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -274,6 +274,19 @@ void destroy_instance(LammpcSession *session) {
   session->nve_velocities.clear();
 }
 
+int reject_atom_count_mismatch(void *lmp, size_t n_atoms, const char *when) {
+  auto *atom_data = static_cast<LAMMPS_NS::LAMMPS *>(lmp)->atom;
+  const long long present = (long long)std::llround(lammps_get_natoms(lmp));
+  if (present == (long long)n_atoms && atom_data->nlocal == (int)n_atoms)
+    return 0;
+  char mismatch[256] = {0};
+  std::snprintf(mismatch, sizeof(mismatch),
+                "atom count mismatch %s: requested=%zu present=%lld", when,
+                n_atoms, present);
+  store_error(mismatch);
+  return -1;
+}
+
 int build_instance(LammpcSession *session, size_t n_atoms,
                    const double *positions_ang, const int *atomic_numbers,
                    const double *cell_ang, int has_cell) {
@@ -523,6 +536,10 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     lammps_close(lmp);
     return -1;
   }
+  if (reject_atom_count_mismatch(lmp, n_atoms, "after setup") != 0) {
+    lammps_close(lmp);
+    return -1;
+  }
 
   session->lmp = lmp;
   session->n_atoms = n_atoms;
@@ -547,6 +564,8 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
     store_error("no live LAMMPS session");
     return -1;
   }
+  if (reject_atom_count_mismatch(session->lmp, n_atoms, "before gather") != 0)
+    return -1;
   if (session->has_cell) {
     std::vector<double> folded = fold_far_images(
         session->params.boundary, session->cell_ang, n_atoms, positions_ang);
