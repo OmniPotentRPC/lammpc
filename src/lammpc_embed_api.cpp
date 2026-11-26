@@ -256,6 +256,51 @@ int type_for_atomic_number(const DecodedParams &params, int z) {
   return -1;
 }
 
+int assign_atom_types(const DecodedParams &params, const int *atomic_numbers,
+                      size_t n_atoms, std::vector<int> *types,
+                      std::string *error) {
+  if (!types)
+    return -1;
+  types->assign(n_atoms, 0);
+  if (n_atoms > 0 && !atomic_numbers) {
+    if (error)
+      *error = "ForceInput atomic number missing from typeToAtomicNumber";
+    return -1;
+  }
+  std::vector<char> consumed(params.type_to_z.size(), 0);
+  for (size_t i = 0; i < n_atoms; ++i) {
+    const int z = atomic_numbers[i];
+    int available = 0;
+    for (int mapped : params.type_to_z)
+      if (mapped == z)
+        ++available;
+    if (available == 0) {
+      if (error)
+        *error = "ForceInput atomic number missing from typeToAtomicNumber";
+      return -1;
+    }
+    if (available == 1) {
+      (*types)[i] = type_for_atomic_number(params, z);
+      continue;
+    }
+    int chosen = -1;
+    for (size_t t = 0; t < params.type_to_z.size(); ++t) {
+      if (consumed[t] || params.type_to_z[t] != z)
+        continue;
+      consumed[t] = 1;
+      chosen = (int)t + 1;
+      break;
+    }
+    if (chosen < 1) {
+      if (error)
+        *error = "duplicate atomic number has no remaining LAMMPS type";
+      return -1;
+    }
+    (*types)[i] = chosen;
+  }
+  return 0;
+}
+
 int run_cmd(void *lmp, const std::string &cmd) {
   (void)lammps_command(lmp, cmd.c_str());
   if (lammps_has_error(lmp)) {
@@ -404,15 +449,12 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     }
   }
 
-  session->atom_types.assign(n_atoms, 0);
-  for (size_t i = 0; i < n_atoms; ++i) {
-    int type = type_for_atomic_number(p, atomic_numbers[i]);
-    if (type < 1) {
-      store_error("ForceInput atomic number missing from typeToAtomicNumber");
-      lammps_close(lmp);
-      return -1;
-    }
-    session->atom_types[i] = type;
+  std::string assign_error;
+  if (assign_atom_types(p, atomic_numbers, n_atoms, &session->atom_types,
+                        &assign_error) != 0) {
+    store_error(assign_error);
+    lammps_close(lmp);
+    return -1;
   }
 
   if (n_atoms > (size_t)std::numeric_limits<int>::max()) {
@@ -576,11 +618,15 @@ bool geometry_matches(const LammpcSession *session, size_t n_atoms,
   if (!atomic_numbers || session->geometry_z.size() != n_atoms ||
       session->atom_types.size() != n_atoms)
     return false;
+  std::vector<int> assigned;
+  if (assign_atom_types(session->params, atomic_numbers, n_atoms, &assigned,
+                        nullptr) != 0 ||
+      assigned.size() != session->atom_types.size())
+    return false;
   for (size_t i = 0; i < n_atoms; ++i) {
     if (session->geometry_z[i] != atomic_numbers[i])
       return false;
-    const int type = type_for_atomic_number(session->params, atomic_numbers[i]);
-    if (type != session->atom_types[i])
+    if (assigned[i] != session->atom_types[i])
       return false;
   }
   return true;

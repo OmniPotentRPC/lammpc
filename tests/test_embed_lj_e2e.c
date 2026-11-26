@@ -1823,6 +1823,44 @@ static void test_reused_session_honors_atomic_numbers(void **state) {
   assert_true(fabs(energy_reused - energy_copper) > 0.1);
 }
 
+static void test_duplicate_atomic_number_uses_each_type(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0", "2 2 0.05 1.0", "1 2 0.2 1.0"};
+  const int type_z[] = {6, 6};
+  const double masses[] = {12.011, 1.0};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 3, type_z, 2, masses, 2, NULL,
+                        0, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int carbon[2] = {6, 6};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, carbon, 2, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  double energy = 0.0;
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, &energy, NULL, 0);
+  double got_masses[2] = {0.0, 0.0};
+  const int mass_ok = lammpc_session_masses(session, got_masses, 2);
+  double energy_again = 0.0;
+  LammpcResult again =
+      calculate_on_session(session, step, step_size, &energy_again, NULL, 0);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(result.ok, 1);
+  assert_int_equal(again.ok, 1);
+  assert_int_equal(mass_ok, 0);
+  assert_true(fabs(got_masses[0] - 12.011) < 1e-12);
+  assert_true(fabs(got_masses[1] - 1.0) < 1e-12);
+  assert_true(fabs(energy - lj_pair_energy(0.2, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy - lj_pair_energy(1.0, 1.0, 1.5)) > 0.1);
+  assert_true(fabs(energy_again - energy) < 1e-8);
+}
+
 static void test_failed_md_reinit_stops_later_steps(void **state) {
   (void)state;
   unsigned char config[8192];
@@ -1966,6 +2004,7 @@ int main(void) {
       cmocka_unit_test(test_overlay_rejected),
       cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
       cmocka_unit_test(test_reused_session_honors_atomic_numbers),
+      cmocka_unit_test(test_duplicate_atomic_number_uses_each_type),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
       cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };

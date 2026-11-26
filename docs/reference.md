@@ -205,7 +205,10 @@ number, and either zero or nine cell entries.
 
 Cells use row major restricted triclinic form. Entries 1, 2, and 5 must be
 zero within `1e-12`. Diagonal entries must be positive. Atomic numbers must
-exist in `typeToAtomicNumber`.
+exist in `typeToAtomicNumber`. A number listed once is shared by every atom
+of that number. A number listed on several types is assigned in list order,
+one unused type per atom, and another atom after those types are used is
+rejected.
 
 ## Projected MD
 
