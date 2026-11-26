@@ -3,10 +3,13 @@
 #include "lammpc_boundary_embed.h"
 
 #include "atom.h"
+#include "compute.h"
 #include "domain.h"
 #include "lammps.h"
 #include "library.h"
 #include "minimage.h"
+#include "modify.h"
+#include "update.h"
 
 #include <algorithm>
 #include <cmath>
@@ -533,7 +536,11 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       return -1;
     }
   }
-  if (run_cmd(lmp, "thermo_style custom step pe ke pxx pyy pzz pxy pxz pyz") != 0 ||
+  if (run_cmd(lmp, "compute lammpc_virial all pressure NULL virial") != 0 ||
+      run_cmd(lmp, "thermo_style custom step pe ke "
+                   "c_lammpc_virial[1] c_lammpc_virial[2] c_lammpc_virial[3] "
+                   "c_lammpc_virial[4] c_lammpc_virial[5] c_lammpc_virial[6]") !=
+          0 ||
       run_cmd(lmp, "run 0") != 0) {
     lammps_close(lmp);
     return -1;
@@ -599,12 +606,30 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
   const double pe_ev = lammps_get_thermo(session->lmp, "pe");
   *energy_h = pe_ev / kEvPerHartree;
 
-  const double sxx = lammps_get_thermo(session->lmp, "pxx");
-  const double syy = lammps_get_thermo(session->lmp, "pyy");
-  const double szz = lammps_get_thermo(session->lmp, "pzz");
-  const double sxy = lammps_get_thermo(session->lmp, "pxy");
-  const double sxz = lammps_get_thermo(session->lmp, "pxz");
-  const double syz = lammps_get_thermo(session->lmp, "pyz");
+  auto *lammps = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp);
+  LAMMPS_NS::Compute *virial =
+      lammps->modify->get_compute_by_id("lammpc_virial");
+  if (!virial || !virial->vector) {
+    store_error("virial pressure compute is missing");
+    return -1;
+  }
+  if (virial->invoked_vector != lammps->update->ntimestep)
+    virial->compute_vector();
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) >
+        0)
+      store_error(buffer);
+    else
+      store_error("virial pressure was not evaluated");
+    return -1;
+  }
+  const double sxx = virial->vector[0];
+  const double syy = virial->vector[1];
+  const double szz = virial->vector[2];
+  const double sxy = virial->vector[3];
+  const double sxz = virial->vector[4];
+  const double syz = virial->vector[5];
   const double evA3_to_hbohr3 =
       (1.0 / kEvPerHartree) * std::pow(kAngstromPerBohr, 3.0);
   const double c = -(1.0 / kBarPerEvA3) * evA3_to_hbohr3;
