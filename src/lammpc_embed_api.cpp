@@ -127,6 +127,7 @@ struct LammpcSession {
   size_t n_atoms = 0;
   int has_cell = 0;
   double cell_ang[9] = {0};
+  std::vector<int> geometry_z;
   std::vector<int> atom_types;
   bool md_ready = false;
   LammpcMdConfig md_config = {};
@@ -269,6 +270,7 @@ void destroy_instance(LammpcSession *session) {
   lammps_close(session->lmp);
   session->lmp = nullptr;
   session->md_ready = false;
+  session->geometry_z.clear();
   session->nve_fix_installed = false;
   session->nve_positions.clear();
   session->nve_velocities.clear();
@@ -544,17 +546,30 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   session->lmp = lmp;
   session->n_atoms = n_atoms;
   session->has_cell = has_cell;
+  session->geometry_z.assign(atomic_numbers, atomic_numbers + n_atoms);
   std::memcpy(session->cell_ang, cell_ang, sizeof(session->cell_ang));
   return 0;
 }
 
 bool geometry_matches(const LammpcSession *session, size_t n_atoms,
-                      const double *cell_ang, int has_cell) {
-  if (!session->lmp || session->n_atoms != n_atoms || session->has_cell != has_cell)
+                      const int *atomic_numbers, const double *cell_ang,
+                      int has_cell) {
+  if (!session->lmp || session->n_atoms != n_atoms ||
+      session->has_cell != has_cell)
     return false;
   for (int i = 0; i < 9; ++i)
     if (session->cell_ang[i] != cell_ang[i])
       return false;
+  if (!atomic_numbers || session->geometry_z.size() != n_atoms ||
+      session->atom_types.size() != n_atoms)
+    return false;
+  for (size_t i = 0; i < n_atoms; ++i) {
+    if (session->geometry_z[i] != atomic_numbers[i])
+      return false;
+    const int type = type_for_atomic_number(session->params, atomic_numbers[i]);
+    if (type != session->atom_types[i])
+      return false;
+  }
   return true;
 }
 
@@ -1040,7 +1055,8 @@ int lammpc_session_md_initialize(
   }
   lammpc_params_release(&arena);
 
-  if (!geometry_matches(session, n_atoms, cell_ang, has_cell) &&
+  if (!geometry_matches(session, n_atoms, atomic_numbers.data(), cell_ang,
+                        has_cell) &&
       build_instance(session, n_atoms, positions.data(), atomic_numbers.data(),
                      cell_ang, has_cell) != 0)
     return -1;
@@ -1478,7 +1494,8 @@ LammpcResult lammpc_session_calculate_result(
   }
   lammpc_params_release(&arena);
 
-  if (!geometry_matches(session, n_atoms, cell_ang, has_cell)) {
+  if (!geometry_matches(session, n_atoms, atomic_numbers.data(), cell_ang,
+                        has_cell)) {
     if (build_instance(session, n_atoms, positions_ang.data(),
                        atomic_numbers.data(), cell_ang, has_cell) != 0)
       return fail_result(g_last_error);

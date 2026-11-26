@@ -52,7 +52,7 @@ if (!result.ok) {
 ```
 
 The first evaluation creates atoms and the LAMMPS box. Later evaluations reuse
-the live instance when atom count and cell match. `PotentialResult` uses the
+the live instance when atom count, atomic numbers, and cell match. `PotentialResult` uses the
 energy and length units requested by `ForceInput`. The scalar
 `LammpcResult.energy_h` always uses Hartree.
 

@@ -1771,6 +1771,58 @@ static LammpcResult calculate_on_session(LammpcSession *session,
   return result;
 }
 
+static double lj_pair_energy(double epsilon, double sigma, double distance) {
+  const double ratio = sigma / distance;
+  const double sr6 = ratio * ratio * ratio * ratio * ratio * ratio;
+  return 4.0 * epsilon * (sr6 * sr6 - sr6);
+}
+
+static void test_reused_session_honors_atomic_numbers(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0", "2 2 0.05 1.0", "1 2 0.2 1.0"};
+  const int type_z[] = {29, 8};
+  const double masses[] = {63.546, 15.999};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 3, type_z, 2, masses, 2, NULL,
+                        0, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int copper[2] = {29, 29};
+  const int oxygen[2] = {8, 8};
+  unsigned char copper_step[4096];
+  unsigned char oxygen_step[4096];
+  const size_t copper_size =
+      make_geometry_step(coords, copper, 2, NULL, copper_step, sizeof(copper_step));
+  const size_t oxygen_size =
+      make_geometry_step(coords, oxygen, 2, NULL, oxygen_step, sizeof(oxygen_step));
+
+  LammpcSession *reused =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *fresh =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(reused);
+  assert_non_null(fresh);
+
+  double energy_copper = 0.0;
+  double energy_reused = 0.0;
+  double energy_fresh = 0.0;
+  LammpcResult first = calculate_on_session(reused, copper_step, copper_size,
+                                            &energy_copper, NULL, 0);
+  LammpcResult second = calculate_on_session(reused, oxygen_step, oxygen_size,
+                                             &energy_reused, NULL, 0);
+  LammpcResult third = calculate_on_session(fresh, oxygen_step, oxygen_size,
+                                            &energy_fresh, NULL, 0);
+  lammpc_session_destroy(reused);
+  lammpc_session_destroy(fresh);
+  assert_int_equal(first.ok, 1);
+  assert_int_equal(second.ok, 1);
+  assert_int_equal(third.ok, 1);
+  assert_true(fabs(energy_copper - lj_pair_energy(1.0, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy_fresh - lj_pair_energy(0.05, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy_reused - energy_fresh) < 1e-8);
+  assert_true(fabs(energy_reused - energy_copper) > 0.1);
+}
+
 static void test_extra_setup_cannot_change_atom_count(void **state) {
   (void)state;
   const char *coeffs[] = {"1 1 1.0 1.0"};
@@ -1831,6 +1883,7 @@ int main(void) {
       cmocka_unit_test(test_calculate_result_null_refreshes_last_error),
       cmocka_unit_test(test_overlay_rejected),
       cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
+      cmocka_unit_test(test_reused_session_honors_atomic_numbers),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
