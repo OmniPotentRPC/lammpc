@@ -54,6 +54,7 @@ struct DecodedParams {
   std::vector<int> type_to_z;
   std::vector<double> masses;
   std::string boundary = "p p p";
+  bool newton_pair = true;
   std::string suffix;
   std::vector<std::string> extra_setup;
 };
@@ -69,6 +70,7 @@ int decode_lammps_params(LammpsParams_ptr params, DecodedParams *out) {
   if (view.boundary.len > 0)
     out->boundary = text_string(view.boundary);
   out->suffix = text_string(view.suffix);
+  out->newton_pair = view.newtonPair != 0;
 
   capn_resolve(&view.pairCoeffs);
   if (view.pairCoeffs.type == CAPN_PTR_LIST ||
@@ -517,6 +519,10 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   }
 
   if (!p.suffix.empty() && run_cmd(lmp, "suffix " + p.suffix) != 0) {
+    lammps_close(lmp);
+    return -1;
+  }
+  if (run_cmd(lmp, p.newton_pair ? "newton on on" : "newton off on") != 0) {
     lammps_close(lmp);
     return -1;
   }
