@@ -8,8 +8,8 @@ Encode `LammpsParams` or a `PotentialConfig` with the pinned
 1. `pairStyle`.
 2. At least one entry in `typeToAtomicNumber`.
 3. Any `pairCoeffs` required by the selected pair style.
-4. Positive `masses` when molecular dynamics will use values other than the
-   one atomic mass unit fallback.
+4. Explicit positive `masses` when a type should not use the standard atomic
+   weight of its atomic number.
 
 Leave `unitsStyle` empty or set it to `metal`. Leave `atomStyle` empty or set
 it to `atomic`. The embed rejects every other value, including

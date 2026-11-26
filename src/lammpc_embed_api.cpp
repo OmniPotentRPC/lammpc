@@ -249,6 +249,155 @@ std::vector<double> fold_far_images(const std::string &boundary,
   return folded;
 }
 
+/* Standard atomic weight in amu for atomic numbers 1 through 118.
+ * Values are the IUPAC conventional standard atomic weights. Elements
+ * with no standard weight use the mass of the longest-lived isotope.
+ * Index 0 is unused. */
+static const double kStandardAtomicWeightAmu[] = {
+    0.0,
+    1.008, /* 1 */
+    4.002602, /* 2 */
+    6.94, /* 3 */
+    9.0121831, /* 4 */
+    10.81, /* 5 */
+    12.011, /* 6 */
+    14.007, /* 7 */
+    15.999, /* 8 */
+    18.998403163, /* 9 */
+    20.1797, /* 10 */
+    22.98976928, /* 11 */
+    24.305, /* 12 */
+    26.9815385, /* 13 */
+    28.085, /* 14 */
+    30.973761998, /* 15 */
+    32.06, /* 16 */
+    35.45, /* 17 */
+    39.948, /* 18 */
+    39.0983, /* 19 */
+    40.078, /* 20 */
+    44.955908, /* 21 */
+    47.867, /* 22 */
+    50.9415, /* 23 */
+    51.9961, /* 24 */
+    54.938044, /* 25 */
+    55.845, /* 26 */
+    58.933194, /* 27 */
+    58.6934, /* 28 */
+    63.546, /* 29 */
+    65.38, /* 30 */
+    69.723, /* 31 */
+    72.630, /* 32 */
+    74.921595, /* 33 */
+    78.971, /* 34 */
+    79.904, /* 35 */
+    83.798, /* 36 */
+    85.4678, /* 37 */
+    87.62, /* 38 */
+    88.90584, /* 39 */
+    91.224, /* 40 */
+    92.90637, /* 41 */
+    95.95, /* 42 */
+    97.90721, /* 43 */
+    101.07, /* 44 */
+    102.90550, /* 45 */
+    106.42, /* 46 */
+    107.8682, /* 47 */
+    112.414, /* 48 */
+    114.818, /* 49 */
+    118.710, /* 50 */
+    121.760, /* 51 */
+    127.60, /* 52 */
+    126.90447, /* 53 */
+    131.293, /* 54 */
+    132.90545196, /* 55 */
+    137.327, /* 56 */
+    138.90547, /* 57 */
+    140.116, /* 58 */
+    140.90766, /* 59 */
+    144.242, /* 60 */
+    144.91276, /* 61 */
+    150.36, /* 62 */
+    151.964, /* 63 */
+    157.25, /* 64 */
+    158.92535, /* 65 */
+    162.500, /* 66 */
+    164.93033, /* 67 */
+    167.259, /* 68 */
+    168.93422, /* 69 */
+    173.054, /* 70 */
+    174.9668, /* 71 */
+    178.49, /* 72 */
+    180.94788, /* 73 */
+    183.84, /* 74 */
+    186.207, /* 75 */
+    190.23, /* 76 */
+    192.217, /* 77 */
+    195.084, /* 78 */
+    196.966569, /* 79 */
+    200.592, /* 80 */
+    204.38, /* 81 */
+    207.2, /* 82 */
+    208.98040, /* 83 */
+    208.98243, /* 84 */
+    209.98715, /* 85 */
+    222.01758, /* 86 */
+    223.01974, /* 87 */
+    226.02541, /* 88 */
+    227.02775, /* 89 */
+    232.0377, /* 90 */
+    231.03588, /* 91 */
+    238.02891, /* 92 */
+    237.04817, /* 93 */
+    244.06421, /* 94 */
+    243.06138, /* 95 */
+    247.07035, /* 96 */
+    247.07031, /* 97 */
+    251.07959, /* 98 */
+    252.0830, /* 99 */
+    257.09511, /* 100 */
+    258.09843, /* 101 */
+    259.1010, /* 102 */
+    262.110, /* 103 */
+    267.122, /* 104 */
+    268.126, /* 105 */
+    271.134, /* 106 */
+    270.133, /* 107 */
+    269.1338, /* 108 */
+    278.156, /* 109 */
+    281.165, /* 110 */
+    281.166, /* 111 */
+    285.177, /* 112 */
+    286.182, /* 113 */
+    289.190, /* 114 */
+    289.194, /* 115 */
+    293.204, /* 116 */
+    293.208, /* 117 */
+    294.214, /* 118 */
+};
+
+
+int mass_for_type(const DecodedParams &params, size_t type_index, double *mass) {
+  if (!mass)
+    return -1;
+  if (type_index < params.masses.size()) {
+    *mass = params.masses[type_index];
+    return 0;
+  }
+  if (type_index >= params.type_to_z.size()) {
+    store_error("atomic number has no standard atomic weight");
+    return -1;
+  }
+  const int z = params.type_to_z[type_index];
+  const size_t known =
+      sizeof(kStandardAtomicWeightAmu) / sizeof(kStandardAtomicWeightAmu[0]);
+  if (z <= 0 || (size_t)z >= known || !(kStandardAtomicWeightAmu[z] > 0.0)) {
+    store_error("atomic number has no standard atomic weight");
+    return -1;
+  }
+  *mass = kStandardAtomicWeightAmu[z];
+  return 0;
+}
+
 int type_for_atomic_number(const DecodedParams &params, int z) {
   for (size_t t = 0; t < params.type_to_z.size(); ++t)
     if (params.type_to_z[t] == z)
@@ -441,7 +590,11 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   }
 
   for (size_t t = 0; t < p.type_to_z.size(); ++t) {
-    double mass = (t < p.masses.size()) ? p.masses[t] : 1.0;
+    double mass = 0.0;
+    if (mass_for_type(p, t, &mass) != 0) {
+      lammps_close(lmp);
+      return -1;
+    }
     if (run_cmd(lmp, "mass " + std::to_string((int)t + 1) + " " +
                          format_double17(mass)) != 0) {
       lammps_close(lmp);
@@ -1158,10 +1311,13 @@ int lammpc_session_md_initialize(
     normal_norm2 += normal[i] * normal[i];
     const size_t atom = i / 3u;
     const int type = session->atom_types[atom];
-    const double mass =
-        (type > 0 && (size_t)type <= session->params.masses.size())
-            ? session->params.masses[(size_t)type - 1u]
-            : 1.0;
+    if (type <= 0) {
+      store_error("constrained MD needs finite positive masses");
+      return -1;
+    }
+    double mass = 0.0;
+    if (mass_for_type(session->params, (size_t)type - 1u, &mass) != 0)
+      return -1;
     if (!(std::isfinite(mass) && mass > 0.0)) {
       store_error("constrained MD needs finite positive masses");
       return -1;

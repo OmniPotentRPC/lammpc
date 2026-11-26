@@ -136,6 +136,11 @@ static size_t make_lj_config_with_units(const char *units, const char *boundary,
   pview.typeToAtomicNumber = type_map;
   pview.newtonPair = 1;
   pview.boundary = (capn_text){(int)strlen(boundary), (char *)boundary, NULL};
+  /* Unit mass keeps the mass-weighted plane on the Cartesian checks.
+   * Omitted masses take the standard atomic weight instead. */
+  capn_list64 mass_list = capn_new_list64(seg, 1);
+  capn_set64(mass_list, 0, capn_from_f64(1.0));
+  pview.masses = mass_list;
   write_LammpsParams(&pview, params);
 
   PotentialConfig_ptr config = new_PotentialConfig(seg);
@@ -1861,6 +1866,36 @@ static void test_duplicate_atomic_number_uses_each_type(void **state) {
   assert_true(fabs(energy_again - energy) < 1e-8);
 }
 
+static void test_omitted_mass_uses_standard_weight(void **state) {
+  (void)state;
+  const char *coeffs[] = {"* *"};
+  const int type_z[] = {29};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("zero 8.0", coeffs, 1, type_z, 1, NULL, 0, NULL, 0,
+                        "f f f", config, sizeof(config));
+  const double coords[3] = {0.0, 0.0, 0.0};
+  const int copper[1] = {29};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, copper, 1, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  double energy = 0.0;
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, &energy, NULL, 0);
+  double mass = 0.0;
+  const int mass_ok = lammpc_session_masses(session, &mass, 1);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(result.ok, 1);
+  assert_int_equal(mass_ok, 0);
+  assert_true(fabs(mass - 63.546) < 1e-12);
+  assert_true(fabs(energy) < 1e-12);
+}
+
 static void test_failed_md_reinit_stops_later_steps(void **state) {
   (void)state;
   unsigned char config[8192];
@@ -2005,6 +2040,7 @@ int main(void) {
       cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
       cmocka_unit_test(test_reused_session_honors_atomic_numbers),
       cmocka_unit_test(test_duplicate_atomic_number_uses_each_type),
+      cmocka_unit_test(test_omitted_mass_uses_standard_weight),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
       cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };

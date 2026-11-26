@@ -141,9 +141,9 @@ loaded library. Callers must not free or modify them.
 | `lammpc_session_destroy` | Releases callback, LAMMPS, and session state. `NULL` is accepted. |
 
 The parameter defaults are `metal`, `atomic`, and `p p p`. `pairStyle` and
-`typeToAtomicNumber` are required. `masses` defaults each omitted type to one
-atomic mass unit in the current implementation. Supply explicit positive
-masses for physical dynamics.
+`typeToAtomicNumber` are required. An omitted `masses` entry uses the
+standard atomic weight of that type's atomic number. Atomic numbers outside
+1 through 118 are rejected. An explicit mass replaces the standard weight.
 
 `PotentialConfig.common` must have no fields set. Classical LAMMPS force
 fields do not lower the electronic structure overlay. The selected union arm
