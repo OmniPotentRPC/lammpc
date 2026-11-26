@@ -64,13 +64,14 @@ The complete executable version of this flow is
 First create a configured session. Then call
 `lammpc_session_md_initialize()` with a valid `ForceInput`, a plane point, a
 nonzero plane normal, and one coordinate for each Cartesian degree of
-freedom. Every control in `LammpcMdConfig` must be finite and positive except
-the seed, which may be zero.
+freedom. Time step and thermal energy must be finite and positive. Friction
+must be finite and non-negative. Zero friction is projected velocity Verlet.
+The seed may be zero.
 
 Use picoseconds for time, electronvolts for thermal energy, reciprocal
 picoseconds for friction, angstroms for Cartesian positions, and atomic mass
-units for masses. The stepper is BAOAB with force, velocity, and stochastic
-increments projected onto the selected plane.
+units for masses. Positive friction uses BAOAB. Force, velocity, and
+stochastic increments are projected onto the selected plane.
 
 ```c
 LammpcMdConfig md = {

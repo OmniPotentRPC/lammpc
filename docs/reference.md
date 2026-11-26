@@ -220,8 +220,9 @@ rejected.
 | `lammpc_session_md_state` | Copies selected state arrays and counters. |
 
 Initialization requires nonnull pointers, a coordinate count equal to three
-times atom count, a finite nonzero normal, and finite point values. Time step,
-thermal energy, and friction must be finite and greater than zero. The seed
+times atom count, a finite nonzero normal, and finite point values. Time step
+and thermal energy must be finite and greater than zero. Friction must be
+finite and non-negative. Zero friction is projected velocity Verlet. The seed
 has no reserved value. Zero is deterministic.
 
 Mass weighted coordinates interpret `point` in `sqrt(amu) * angstrom` and the
