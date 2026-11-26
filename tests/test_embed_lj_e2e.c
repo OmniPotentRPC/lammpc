@@ -1896,6 +1896,40 @@ static void test_omitted_mass_uses_standard_weight(void **state) {
   assert_true(fabs(energy) < 1e-12);
 }
 
+static void test_nonfinite_cell_is_rejected(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_lj_config("p p p", config, sizeof(config));
+  const double coords[6] = {1.0, 1.0, 1.0, 3.0, 1.0, 1.0};
+  const int z[2] = {29, 29};
+  const double box_nan[9] = {20.0, 0.0, 0.0, nan(""), 20.0, 0.0, 0.0, 0.0,
+                             20.0};
+  const double box_inf[9] = {INFINITY, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0,
+                             20.0};
+  unsigned char step_nan[4096];
+  unsigned char step_inf[4096];
+  const size_t nan_size =
+      make_geometry_step(coords, z, 2, box_nan, step_nan, sizeof(step_nan));
+  const size_t inf_size =
+      make_geometry_step(coords, z, 2, box_inf, step_inf, sizeof(step_inf));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  LammpcResult nan_result =
+      calculate_on_session(session, step_nan, nan_size, NULL, NULL, 0);
+  LammpcResult inf_result =
+      calculate_on_session(session, step_inf, inf_size, NULL, NULL, 0);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(nan_result.ok, 0);
+  assert_non_null(strstr(nan_result.message, "finite"));
+  assert_null(strstr(nan_result.message, "Expected floating point"));
+  assert_int_equal(inf_result.ok, 0);
+  assert_non_null(strstr(inf_result.message, "finite"));
+  assert_null(strstr(inf_result.message, "Expected floating point"));
+}
+
 static void test_failed_md_reinit_stops_later_steps(void **state) {
   (void)state;
   unsigned char config[8192];
@@ -2041,6 +2075,7 @@ int main(void) {
       cmocka_unit_test(test_reused_session_honors_atomic_numbers),
       cmocka_unit_test(test_duplicate_atomic_number_uses_each_type),
       cmocka_unit_test(test_omitted_mass_uses_standard_weight),
+      cmocka_unit_test(test_nonfinite_cell_is_rejected),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
       cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };

@@ -488,10 +488,26 @@ int reject_atom_count_mismatch(void *lmp, size_t n_atoms, const char *when) {
   return -1;
 }
 
+int reject_nonfinite_cell(const double *cell_ang) {
+  if (!cell_ang) {
+    store_error("cell entries must be finite");
+    return -1;
+  }
+  for (int i = 0; i < 9; ++i) {
+    if (!std::isfinite(cell_ang[i])) {
+      store_error("cell entries must be finite");
+      return -1;
+    }
+  }
+  return 0;
+}
+
 int build_instance(LammpcSession *session, size_t n_atoms,
                    const double *positions_ang, const int *atomic_numbers,
                    const double *cell_ang, int has_cell) {
   destroy_instance(session);
+  if (has_cell && reject_nonfinite_cell(cell_ang) != 0)
+    return -1;
   const DecodedParams &p = session->params;
 
   char arg0[] = "lammpc";
@@ -1547,6 +1563,8 @@ int lammpc_session_nve_set_positions(LammpcSession *session,
     return -1;
   }
   if (cell_ang) {
+    if (reject_nonfinite_cell(cell_ang) != 0)
+      return -1;
     if (std::fabs(cell_ang[1]) > 1e-12 || std::fabs(cell_ang[2]) > 1e-12 ||
         std::fabs(cell_ang[5]) > 1e-12) {
       store_error("nve_set_positions supports restricted triclinic boxes only");
