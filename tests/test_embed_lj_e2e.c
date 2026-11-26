@@ -1866,6 +1866,45 @@ static void test_failed_md_reinit_stops_later_steps(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void test_explicit_zero_charge_is_rejected(void **state) {
+  (void)state;
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.pairStyle = (capn_text){11, "lj/cut 10.0", NULL};
+  capn_list32 type_map = capn_new_list32(seg, 1);
+  capn_set32(type_map, 0, 29);
+  pview.typeToAtomicNumber = type_map;
+  pview.newtonPair = 1;
+  write_LammpsParams(&pview, params);
+
+  CommonMethodSpec_ptr common = new_CommonMethodSpec(seg);
+  struct CommonMethodSpec cm;
+  memset(&cm, 0, sizeof(cm));
+  cm.hasCharge = 1;
+  cm.charge = 0;
+  write_CommonMethodSpec(&cm, common);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  cview.common = common;
+  write_PotentialConfig(&cview, config);
+
+  unsigned char buf[8192];
+  size_t written = write_flat(&arena, config.p, buf, sizeof(buf));
+  capn_free(&arena);
+
+  assert_null(lammpc_session_create_from_config(buf, written));
+  assert_non_null(strstr(lammpc_last_error(), "overlay"));
+}
+
 static void test_extra_setup_cannot_change_atom_count(void **state) {
   (void)state;
   const char *coeffs[] = {"1 1 1.0 1.0"};
@@ -1928,6 +1967,7 @@ int main(void) {
       cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
       cmocka_unit_test(test_reused_session_honors_atomic_numbers),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
+      cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

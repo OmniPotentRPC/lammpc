@@ -872,8 +872,9 @@ int reject_common_overlay(CommonMethodSpec_ptr common) {
   capn_resolve(&view.xcFunctionals);
   capn_resolve(&view.kMesh.p);
   int has_any = view.xcFunctionals.len > 0 || view.basisSet.len > 0 ||
-                view.planewaveCutoffEv > 0.0 || view.charge != 0 ||
-                view.spinMultiplicity > 0 || view.scfEnergyToleranceEv > 0.0 ||
+                view.planewaveCutoffEv > 0.0 || view.hasCharge ||
+                view.charge != 0 || view.spinMultiplicity > 0 ||
+                view.scfEnergyToleranceEv > 0.0 ||
                 view.scfMaxIterations > 0 || view.kMesh.p.len > 0 ||
                 view.vanDerWaalsMethod.len > 0 ||
                 view.relativityMethod.len > 0 || view.vanDerWaalsS6 > 0.0;
