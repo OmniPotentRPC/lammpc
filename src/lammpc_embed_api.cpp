@@ -1323,13 +1323,15 @@ int lammpc_session_md_initialize(
   session->md_forces.assign(coordinate_count, 0.0);
   session->md_removed_velocities.assign(coordinate_count, 0.0);
   session->md_masses.assign(coordinate_count, 0.0);
-  double normal_norm2 = 0.0;
+  double max_abs_normal = 0.0;
   for (size_t i = 0; i < coordinate_count; ++i) {
     if (!std::isfinite(point[i]) || !std::isfinite(normal[i])) {
       store_error("plane point and normal must be finite");
       return -1;
     }
-    normal_norm2 += normal[i] * normal[i];
+    const double abs_normal = std::fabs(normal[i]);
+    if (abs_normal > max_abs_normal)
+      max_abs_normal = abs_normal;
     const size_t atom = i / 3u;
     const int type = session->atom_types[atom];
     if (type <= 0) {
@@ -1345,13 +1347,47 @@ int lammpc_session_md_initialize(
     }
     session->md_masses[i] = mass;
   }
-  if (!(normal_norm2 > 0.0)) {
+  if (!std::isfinite(max_abs_normal)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  if (!(max_abs_normal > 0.0)) {
     store_error("plane normal vanishes");
     return -1;
   }
-  const double inverse_normal_norm = 1.0 / std::sqrt(normal_norm2);
-  for (double &value : session->md_normal)
-    value *= inverse_normal_norm;
+  double scaled_norm2 = 0.0;
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    const double scaled = normal[i] / max_abs_normal;
+    scaled_norm2 += scaled * scaled;
+  }
+  if (!std::isfinite(scaled_norm2)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  if (!(scaled_norm2 > 0.0)) {
+    store_error("plane normal vanishes");
+    return -1;
+  }
+  const double inverse_scaled_norm = 1.0 / std::sqrt(scaled_norm2);
+  if (!std::isfinite(inverse_scaled_norm)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  double normalized_peak = 0.0;
+  for (double &value : session->md_normal) {
+    value = (value / max_abs_normal) * inverse_scaled_norm;
+    if (!std::isfinite(value)) {
+      store_error("plane point and normal must be finite");
+      return -1;
+    }
+    const double abs_value = std::fabs(value);
+    if (abs_value > normalized_peak)
+      normalized_peak = abs_value;
+  }
+  if (!(normalized_peak > 0.0)) {
+    store_error("plane normal vanishes");
+    return -1;
+  }
   if (config->coordinates == LAMMPC_PLANE_CARTESIAN &&
       !(md_plane_denominator(session) > 0.0)) {
     store_error("Cartesian plane has a zero mass-metric denominator");

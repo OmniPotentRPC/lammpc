@@ -2021,6 +2021,95 @@ static void test_early_md_reinit_failure_stops_the_trajectory(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void test_huge_finite_normal_keeps_the_constraint(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *unit = lammpc_session_create_from_config(config, config_size);
+  LammpcSession *huge = lammpc_session_create_from_config(config, config_size);
+  assert_non_null(unit);
+  assert_non_null(huge);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double scale = 1.0e200;
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double unit_normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                                 inverse_sqrt_two,  0.0, 0.0};
+  double huge_normal[6];
+  double zero_normal[6];
+  double nonfinite_normal[6];
+  for (int i = 0; i < 6; ++i) {
+    huge_normal[i] = unit_normal[i] * scale;
+    zero_normal[i] = 0.0;
+    nonfinite_normal[i] = unit_normal[i];
+  }
+  nonfinite_normal[0] = INFINITY;
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 0.0,
+      .seed = 11,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+
+  assert_int_equal(lammpc_session_md_initialize(unit, step, step_size, point,
+                                                zero_normal, 6, &controls),
+                   -1);
+  assert_string_equal(lammpc_last_error(), "plane normal vanishes");
+  assert_int_equal(lammpc_session_md_initialize(
+                       unit, step, step_size, point, nonfinite_normal, 6,
+                       &controls),
+                   -1);
+  assert_non_null(strstr(lammpc_last_error(), "finite"));
+
+  assert_int_equal(lammpc_session_md_initialize(unit, step, step_size, point,
+                                                unit_normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(huge, step, step_size, point,
+                                                huge_normal, 6, &controls),
+                   0);
+
+  double unit_velocities[6], huge_velocities[6];
+  double unit_removed[6], huge_removed[6];
+  double unit_forces[6], huge_forces[6];
+  double unit_positions[6], huge_positions[6];
+  assert_int_equal(lammpc_session_md_state(unit, NULL, unit_velocities, NULL,
+                                           unit_removed, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(huge, NULL, huge_velocities, NULL,
+                                           huge_removed, 6, NULL),
+                   0);
+  for (int i = 0; i < 6; ++i)
+    assert_true(isfinite(huge_velocities[i]));
+  assert_memory_equal(unit_velocities, huge_velocities,
+                      sizeof(unit_velocities));
+  assert_memory_equal(unit_removed, huge_removed, sizeof(unit_removed));
+
+  assert_int_equal(lammpc_session_md_step(unit, 16), 0);
+  assert_int_equal(lammpc_session_md_step(huge, 16), 0);
+  assert_int_equal(lammpc_session_md_state(
+                       unit, unit_positions, NULL, unit_forces, NULL, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       huge, huge_positions, NULL, huge_forces, NULL, 6, NULL),
+                   0);
+  assert_memory_equal(unit_positions, huge_positions, sizeof(unit_positions));
+  double distance = 0.0;
+  double projected_force = 0.0;
+  for (int i = 0; i < 6; ++i) {
+    distance += unit_normal[i] * (huge_positions[i] - point[i]);
+    projected_force += unit_normal[i] * huge_forces[i];
+    assert_true(isfinite(huge_positions[i]));
+    assert_true(isfinite(huge_forces[i]));
+  }
+  assert_true(fabs(distance) < 1e-12);
+  assert_true(fabs(projected_force) < 1e-12);
+  lammpc_session_destroy(unit);
+  lammpc_session_destroy(huge);
+}
+
 static void test_explicit_zero_charge_is_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -2126,6 +2215,7 @@ int main(void) {
       cmocka_unit_test(test_nonfinite_cell_is_rejected),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
       cmocka_unit_test(test_early_md_reinit_failure_stops_the_trajectory),
+      cmocka_unit_test(test_huge_finite_normal_keeps_the_constraint),
       cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
