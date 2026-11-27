@@ -136,6 +136,11 @@ static size_t make_lj_config_with_units(const char *units, const char *boundary,
   pview.typeToAtomicNumber = type_map;
   pview.newtonPair = 1;
   pview.boundary = (capn_text){(int)strlen(boundary), (char *)boundary, NULL};
+  /* Unit mass keeps the mass-weighted plane on the Cartesian checks.
+   * Omitted masses take the standard atomic weight instead. */
+  capn_list64 mass_list = capn_new_list64(seg, 1);
+  capn_set64(mass_list, 0, capn_from_f64(1.0));
+  pview.masses = mass_list;
   write_LammpsParams(&pview, params);
 
   PotentialConfig_ptr config = new_PotentialConfig(seg);
@@ -1645,6 +1650,531 @@ static void test_overlay_rejected(void **state) {
   assert_int_not_equal(lammpc_configure(buf, written), 0);
 }
 
+static size_t make_typed_config(const char *pair_style, const char **coeffs,
+                                int n_coeffs, const int *type_z, int n_types,
+                                const double *masses, int n_masses,
+                                const char **extra, int n_extra,
+                                const char *boundary, unsigned char *dst,
+                                size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  capn_ptr coeff_list = capn_new_ptr_list(seg, n_coeffs);
+  for (int i = 0; i < n_coeffs; ++i) {
+    capn_text text = {(int)strlen(coeffs[i]), (char *)coeffs[i], NULL};
+    assert_int_equal(capn_set_text(coeff_list, i, text), 0);
+  }
+  capn_list32 type_map = capn_new_list32(seg, n_types);
+  for (int i = 0; i < n_types; ++i)
+    capn_set32(type_map, i, type_z[i]);
+
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.unitsStyle = (capn_text){5, "metal", NULL};
+  pview.atomStyle = (capn_text){6, "atomic", NULL};
+  pview.pairStyle =
+      (capn_text){(int)strlen(pair_style), (char *)pair_style, NULL};
+  pview.pairCoeffs = coeff_list;
+  pview.typeToAtomicNumber = type_map;
+  pview.newtonPair = 1;
+  pview.boundary =
+      (capn_text){(int)strlen(boundary), (char *)boundary, NULL};
+  if (n_masses > 0) {
+    capn_list64 mass_list = capn_new_list64(seg, n_masses);
+    for (int i = 0; i < n_masses; ++i)
+      capn_set64(mass_list, i, capn_from_f64(masses[i]));
+    pview.masses = mass_list;
+  }
+  if (n_extra > 0) {
+    capn_ptr setup = capn_new_ptr_list(seg, n_extra);
+    for (int i = 0; i < n_extra; ++i) {
+      capn_text text = {(int)strlen(extra[i]), (char *)extra[i], NULL};
+      assert_int_equal(capn_set_text(setup, i, text), 0);
+    }
+    pview.extraSetup = setup;
+  }
+  write_LammpsParams(&pview, params);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  write_PotentialConfig(&cview, config);
+
+  size_t written = write_flat(&arena, config.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static size_t make_geometry_step(const double *coords, const int *z,
+                                 int n_atoms, const double *box9,
+                                 unsigned char *dst, size_t dst_size) {
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  ForceInput_ptr input = new_ForceInput(seg);
+  capn_list64 pos = capn_new_list64(seg, n_atoms * 3);
+  for (int i = 0; i < n_atoms * 3; ++i)
+    capn_set64(pos, i, capn_from_f64(coords[i]));
+  capn_list32 atmnrs = capn_new_list32(seg, n_atoms);
+  for (int i = 0; i < n_atoms; ++i)
+    capn_set32(atmnrs, i, z[i]);
+
+  struct ForceInput view;
+  memset(&view, 0, sizeof(view));
+  view.pos = pos;
+  view.atmnrs = atmnrs;
+  if (box9) {
+    capn_list64 box = capn_new_list64(seg, 9);
+    for (int i = 0; i < 9; ++i)
+      capn_set64(box, i, capn_from_f64(box9[i]));
+    view.box = box;
+  }
+  view.lengthUnit = (capn_text){8, "angstrom", NULL};
+  view.energyUnit = (capn_text){2, "eV", NULL};
+  write_ForceInput(&view, input);
+
+  size_t written = write_flat(&arena, input.p, dst, dst_size);
+  capn_free(&arena);
+  return written;
+}
+
+static LammpcResult calculate_on_session(LammpcSession *session,
+                                         const unsigned char *step,
+                                         size_t step_size, double *energy,
+                                         double *forces, int n_forces) {
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  unsigned char *out = (unsigned char *)malloc(need);
+  assert_non_null(out);
+  size_t wrote = 0;
+  LammpcResult result = lammpc_session_calculate_result(
+      session, step, step_size, out, need, &wrote);
+  if (result.ok) {
+    struct capn arena;
+    assert_int_equal(capn_init_mem(&arena, out, wrote, 0), 0);
+    PotentialResult_ptr decoded;
+    decoded.p = capn_getp(capn_root(&arena), 0, 1);
+    assert_int_equal(decoded.p.type, CAPN_STRUCT);
+    struct PotentialResult view;
+    read_PotentialResult(&view, decoded);
+    if (energy)
+      *energy = view.energy;
+    if (forces) {
+      capn_resolve(&view.forces.p);
+      assert_int_equal(view.forces.p.len, n_forces);
+      for (int i = 0; i < n_forces; ++i)
+        forces[i] = capn_to_f64(capn_get64(view.forces, i));
+    }
+    capn_free(&arena);
+  }
+  free(out);
+  return result;
+}
+
+static double lj_pair_energy(double epsilon, double sigma, double distance) {
+  const double ratio = sigma / distance;
+  const double sr6 = ratio * ratio * ratio * ratio * ratio * ratio;
+  return 4.0 * epsilon * (sr6 * sr6 - sr6);
+}
+
+static void test_reused_session_honors_atomic_numbers(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0", "2 2 0.05 1.0", "1 2 0.2 1.0"};
+  const int type_z[] = {29, 8};
+  const double masses[] = {63.546, 15.999};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 3, type_z, 2, masses, 2, NULL,
+                        0, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int copper[2] = {29, 29};
+  const int oxygen[2] = {8, 8};
+  unsigned char copper_step[4096];
+  unsigned char oxygen_step[4096];
+  const size_t copper_size =
+      make_geometry_step(coords, copper, 2, NULL, copper_step, sizeof(copper_step));
+  const size_t oxygen_size =
+      make_geometry_step(coords, oxygen, 2, NULL, oxygen_step, sizeof(oxygen_step));
+
+  LammpcSession *reused =
+      lammpc_session_create_from_config(config, config_size);
+  LammpcSession *fresh =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(reused);
+  assert_non_null(fresh);
+
+  double energy_copper = 0.0;
+  double energy_reused = 0.0;
+  double energy_fresh = 0.0;
+  LammpcResult first = calculate_on_session(reused, copper_step, copper_size,
+                                            &energy_copper, NULL, 0);
+  LammpcResult second = calculate_on_session(reused, oxygen_step, oxygen_size,
+                                             &energy_reused, NULL, 0);
+  LammpcResult third = calculate_on_session(fresh, oxygen_step, oxygen_size,
+                                            &energy_fresh, NULL, 0);
+  lammpc_session_destroy(reused);
+  lammpc_session_destroy(fresh);
+  assert_int_equal(first.ok, 1);
+  assert_int_equal(second.ok, 1);
+  assert_int_equal(third.ok, 1);
+  assert_true(fabs(energy_copper - lj_pair_energy(1.0, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy_fresh - lj_pair_energy(0.05, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy_reused - energy_fresh) < 1e-8);
+  assert_true(fabs(energy_reused - energy_copper) > 0.1);
+}
+
+static void test_duplicate_atomic_number_uses_each_type(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0", "2 2 0.05 1.0", "1 2 0.2 1.0"};
+  const int type_z[] = {6, 6};
+  const double masses[] = {12.011, 1.0};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 3, type_z, 2, masses, 2, NULL,
+                        0, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int carbon[2] = {6, 6};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, carbon, 2, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  double energy = 0.0;
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, &energy, NULL, 0);
+  double got_masses[2] = {0.0, 0.0};
+  const int mass_ok = lammpc_session_masses(session, got_masses, 2);
+  double energy_again = 0.0;
+  LammpcResult again =
+      calculate_on_session(session, step, step_size, &energy_again, NULL, 0);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(result.ok, 1);
+  assert_int_equal(again.ok, 1);
+  assert_int_equal(mass_ok, 0);
+  assert_true(fabs(got_masses[0] - 12.011) < 1e-12);
+  assert_true(fabs(got_masses[1] - 1.0) < 1e-12);
+  assert_true(fabs(energy - lj_pair_energy(0.2, 1.0, 1.5)) < 1e-8);
+  assert_true(fabs(energy - lj_pair_energy(1.0, 1.0, 1.5)) > 0.1);
+  assert_true(fabs(energy_again - energy) < 1e-8);
+}
+
+static void test_omitted_mass_uses_standard_weight(void **state) {
+  (void)state;
+  const char *coeffs[] = {"* *"};
+  const int type_z[] = {29};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("zero 8.0", coeffs, 1, type_z, 1, NULL, 0, NULL, 0,
+                        "f f f", config, sizeof(config));
+  const double coords[3] = {0.0, 0.0, 0.0};
+  const int copper[1] = {29};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, copper, 1, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  double energy = 0.0;
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, &energy, NULL, 0);
+  double mass = 0.0;
+  const int mass_ok = lammpc_session_masses(session, &mass, 1);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(result.ok, 1);
+  assert_int_equal(mass_ok, 0);
+  assert_true(fabs(mass - 63.546) < 1e-12);
+  assert_true(fabs(energy) < 1e-12);
+}
+
+static void test_nonfinite_cell_is_rejected(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_lj_config("p p p", config, sizeof(config));
+  const double coords[6] = {1.0, 1.0, 1.0, 3.0, 1.0, 1.0};
+  const int z[2] = {29, 29};
+  const double box_nan[9] = {20.0, 0.0, 0.0, nan(""), 20.0, 0.0, 0.0, 0.0,
+                             20.0};
+  const double box_inf[9] = {INFINITY, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0,
+                             20.0};
+  unsigned char step_nan[4096];
+  unsigned char step_inf[4096];
+  const size_t nan_size =
+      make_geometry_step(coords, z, 2, box_nan, step_nan, sizeof(step_nan));
+  const size_t inf_size =
+      make_geometry_step(coords, z, 2, box_inf, step_inf, sizeof(step_inf));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  LammpcResult nan_result =
+      calculate_on_session(session, step_nan, nan_size, NULL, NULL, 0);
+  LammpcResult inf_result =
+      calculate_on_session(session, step_inf, inf_size, NULL, NULL, 0);
+  lammpc_session_destroy(session);
+
+  assert_int_equal(nan_result.ok, 0);
+  assert_non_null(strstr(nan_result.message, "finite"));
+  assert_null(strstr(nan_result.message, "Expected floating point"));
+  assert_int_equal(inf_result.ok, 0);
+  assert_non_null(strstr(inf_result.message, "finite"));
+  assert_null(strstr(inf_result.message, "Expected floating point"));
+}
+
+static void test_failed_md_reinit_stops_later_steps(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const double zero_normal[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.001,
+      .thermal_energy_ev = 0.05,
+      .friction_per_ps = 0.0,
+      .seed = 7,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL, 6,
+                                           &observation),
+                   0);
+  assert_int_equal(observation.steps, 1);
+
+  assert_int_equal(lammpc_session_md_initialize(session, step, step_size, point,
+                                                zero_normal, 6, &controls),
+                   -1);
+  assert_string_equal(lammpc_last_error(), "plane normal vanishes");
+  assert_int_not_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL,
+                                               6, &observation),
+                       0);
+  assert_int_not_equal(lammpc_session_md_step(session, 1), 0);
+  lammpc_session_destroy(session);
+}
+
+static void test_early_md_reinit_failure_stops_the_trajectory(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.001,
+      .thermal_energy_ev = 0.05,
+      .friction_per_ps = 0.0,
+      .seed = 7,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  LammpcMdConfig rejected = controls;
+  rejected.time_step_ps = 0.0;
+
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+
+  assert_int_equal(lammpc_session_md_initialize(session, step, step_size, point,
+                                                normal, 6, &rejected),
+                   -1);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "timestep and thermal energy must be finite"));
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_step(session, 1), -1);
+  assert_string_equal(lammpc_last_error(), "constrained MD is not initialized");
+  assert_int_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL, 6,
+                                           &observation),
+                   -1);
+
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+  lammpc_session_destroy(session);
+}
+
+static void test_huge_finite_normal_keeps_the_constraint(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *unit = lammpc_session_create_from_config(config, config_size);
+  LammpcSession *huge = lammpc_session_create_from_config(config, config_size);
+  assert_non_null(unit);
+  assert_non_null(huge);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double scale = 1.0e200;
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double unit_normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                                 inverse_sqrt_two,  0.0, 0.0};
+  double huge_normal[6];
+  double zero_normal[6];
+  double nonfinite_normal[6];
+  for (int i = 0; i < 6; ++i) {
+    huge_normal[i] = unit_normal[i] * scale;
+    zero_normal[i] = 0.0;
+    nonfinite_normal[i] = unit_normal[i];
+  }
+  nonfinite_normal[0] = INFINITY;
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.0002,
+      .thermal_energy_ev = 0.01,
+      .friction_per_ps = 0.0,
+      .seed = 11,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+
+  assert_int_equal(lammpc_session_md_initialize(unit, step, step_size, point,
+                                                zero_normal, 6, &controls),
+                   -1);
+  assert_string_equal(lammpc_last_error(), "plane normal vanishes");
+  assert_int_equal(lammpc_session_md_initialize(
+                       unit, step, step_size, point, nonfinite_normal, 6,
+                       &controls),
+                   -1);
+  assert_non_null(strstr(lammpc_last_error(), "finite"));
+
+  assert_int_equal(lammpc_session_md_initialize(unit, step, step_size, point,
+                                                unit_normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_initialize(huge, step, step_size, point,
+                                                huge_normal, 6, &controls),
+                   0);
+
+  double unit_velocities[6], huge_velocities[6];
+  double unit_removed[6], huge_removed[6];
+  double unit_forces[6], huge_forces[6];
+  double unit_positions[6], huge_positions[6];
+  assert_int_equal(lammpc_session_md_state(unit, NULL, unit_velocities, NULL,
+                                           unit_removed, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(huge, NULL, huge_velocities, NULL,
+                                           huge_removed, 6, NULL),
+                   0);
+  for (int i = 0; i < 6; ++i)
+    assert_true(isfinite(huge_velocities[i]));
+  assert_memory_equal(unit_velocities, huge_velocities,
+                      sizeof(unit_velocities));
+  assert_memory_equal(unit_removed, huge_removed, sizeof(unit_removed));
+
+  assert_int_equal(lammpc_session_md_step(unit, 16), 0);
+  assert_int_equal(lammpc_session_md_step(huge, 16), 0);
+  assert_int_equal(lammpc_session_md_state(
+                       unit, unit_positions, NULL, unit_forces, NULL, 6, NULL),
+                   0);
+  assert_int_equal(lammpc_session_md_state(
+                       huge, huge_positions, NULL, huge_forces, NULL, 6, NULL),
+                   0);
+  assert_memory_equal(unit_positions, huge_positions, sizeof(unit_positions));
+  double distance = 0.0;
+  double projected_force = 0.0;
+  for (int i = 0; i < 6; ++i) {
+    distance += unit_normal[i] * (huge_positions[i] - point[i]);
+    projected_force += unit_normal[i] * huge_forces[i];
+    assert_true(isfinite(huge_positions[i]));
+    assert_true(isfinite(huge_forces[i]));
+  }
+  assert_true(fabs(distance) < 1e-12);
+  assert_true(fabs(projected_force) < 1e-12);
+  lammpc_session_destroy(unit);
+  lammpc_session_destroy(huge);
+}
+
+static void test_explicit_zero_charge_is_rejected(void **state) {
+  (void)state;
+  struct capn arena;
+  capn_init_malloc(&arena);
+  struct capn_segment *seg = capn_root(&arena).seg;
+
+  LammpsParams_ptr params = new_LammpsParams(seg);
+  struct LammpsParams pview;
+  memset(&pview, 0, sizeof(pview));
+  pview.pairStyle = (capn_text){11, "lj/cut 10.0", NULL};
+  capn_list32 type_map = capn_new_list32(seg, 1);
+  capn_set32(type_map, 0, 29);
+  pview.typeToAtomicNumber = type_map;
+  pview.newtonPair = 1;
+  write_LammpsParams(&pview, params);
+
+  CommonMethodSpec_ptr common = new_CommonMethodSpec(seg);
+  struct CommonMethodSpec cm;
+  memset(&cm, 0, sizeof(cm));
+  cm.hasCharge = 1;
+  cm.charge = 0;
+  write_CommonMethodSpec(&cm, common);
+
+  PotentialConfig_ptr config = new_PotentialConfig(seg);
+  struct PotentialConfig cview;
+  memset(&cview, 0, sizeof(cview));
+  cview.which = PotentialConfig_lammps;
+  cview.lammps = params;
+  cview.common = common;
+  write_PotentialConfig(&cview, config);
+
+  unsigned char buf[8192];
+  size_t written = write_flat(&arena, config.p, buf, sizeof(buf));
+  capn_free(&arena);
+
+  assert_null(lammpc_session_create_from_config(buf, written));
+  assert_non_null(strstr(lammpc_last_error(), "overlay"));
+}
+
+static void test_extra_setup_cannot_change_atom_count(void **state) {
+  (void)state;
+  const char *coeffs[] = {"1 1 1.0 1.0"};
+  const int type_z[] = {29};
+  const double masses[] = {63.546};
+  const char *extra[] = {"create_atoms 1 single 4.0 4.0 4.0"};
+  unsigned char config[8192];
+  const size_t config_size =
+      make_typed_config("lj/cut 10.0", coeffs, 1, type_z, 1, masses, 1, extra,
+                        1, "f f f", config, sizeof(config));
+  const double coords[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const int z[2] = {29, 29};
+  unsigned char step[4096];
+  const size_t step_size =
+      make_geometry_step(coords, z, 2, NULL, step, sizeof(step));
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  LammpcResult result =
+      calculate_on_session(session, step, step_size, NULL, NULL, 0);
+  lammpc_session_destroy(session);
+  assert_int_equal(result.ok, 0);
+  assert_non_null(strstr(result.message, "atom count"));
+}
+
 int main(void) {
   const struct CMUnitTest tests[] = {
       cmocka_unit_test(test_lj_dimer_session_matches_analytic),
@@ -1678,6 +2208,15 @@ int main(void) {
       cmocka_unit_test(test_early_returns_refresh_last_error),
       cmocka_unit_test(test_calculate_result_null_refreshes_last_error),
       cmocka_unit_test(test_overlay_rejected),
+      cmocka_unit_test(test_extra_setup_cannot_change_atom_count),
+      cmocka_unit_test(test_reused_session_honors_atomic_numbers),
+      cmocka_unit_test(test_duplicate_atomic_number_uses_each_type),
+      cmocka_unit_test(test_omitted_mass_uses_standard_weight),
+      cmocka_unit_test(test_nonfinite_cell_is_rejected),
+      cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
+      cmocka_unit_test(test_early_md_reinit_failure_stops_the_trajectory),
+      cmocka_unit_test(test_huge_finite_normal_keeps_the_constraint),
+      cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -91,7 +91,10 @@ if with_lammps
   minimage_dep = dependency('minimage', fallback: ['minimage', 'minimage_dep'])
   lammpc_backend_sources = ['src/lammpc_embed_api.cpp']
   lammpc_backend_deps = [liblammps_dep, minimage_dep]
-  lammpc_backend_cpp_args = ['-std=c++17']
+  lammpc_backend_cpp_args = [
+    '-std=c++17',
+    '-DLAMMPC_VERSION_STRING="' + meson.project_version() + '"',
+  ]
 else
   lammpc_backend_sources = ['src/lammpc_stub.c']
   lammpc_backend_deps = []
@@ -281,7 +284,7 @@ if get_option('with_tests')
         dependencies: [cmocka_dep] + lammpc_params_deps + lammpc_backend_deps,
         include_directories: [inc] + lammpc_params_includes,
         c_args: common_c_args,
-        cpp_args: ['-std=c++17'],
+        cpp_args: lammpc_backend_cpp_args,
       ),
       env: lammps_root_env,
       suite: ['e2e'],
@@ -308,7 +311,7 @@ if get_option('with_tests')
                     lammpc_backend_deps,
       include_directories: [inc] + lammpc_params_includes,
       c_args: common_c_args,
-      cpp_args: ['-std=c++17'],
+      cpp_args: lammpc_backend_cpp_args,
     )
     # GCC's ThreadSanitizer aborts with exit 66 ("unexpected memory mapping")
     # when ASLR places the PIE image or a library outside its fixed shadow.

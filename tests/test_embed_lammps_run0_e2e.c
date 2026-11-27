@@ -141,8 +141,9 @@ static void run_lmp_reference(const char *lammps_root, const char *lmp_exe,
                               const char *pair_style,
                               const char *pair_coeff, const char *mass_line,
                               const double *positions_ang, int n_atoms,
-                              const double *box9, double *energy,
-                              double *forces, double stress6[6]) {
+                              const double *box9, const double *velocities,
+                              double *energy, double *forces,
+                              double stress6[6]) {
   char tmp_template[] = "lammpc-ref-XXXXXX";
   char *tmp_dir = mkdtemp(tmp_template);
   assert_non_null(tmp_dir);
@@ -169,6 +170,14 @@ static void run_lmp_reference(const char *lammps_root, const char *lmp_exe,
             positions_ang[3 * i + 2]);
   }
   fprintf(in, "mass 1 %s\n", mass_line);
+  if (velocities) {
+    for (int i = 0; i < n_atoms; ++i) {
+      fprintf(in, "group lammpc_v%d id %d\n", i + 1, i + 1);
+      fprintf(in, "velocity lammpc_v%d set %.16g %.16g %.16g\n", i + 1,
+              velocities[3 * i + 0], velocities[3 * i + 1],
+              velocities[3 * i + 2]);
+    }
+  }
   fprintf(in, "pair_style %s\n", pair_style);
   fprintf(in, "pair_coeff %s\n", pair_coeff);
   fprintf(in, "compute p all pressure NULL virial\n");
@@ -325,7 +334,7 @@ static void check_case(const char *pair_style, const char *pair_coeff,
   char mass_line[64];
   snprintf(mass_line, sizeof(mass_line), "%.16g", mass);
   run_lmp_reference(lammps_root, lmp_exe, pair_style, pair_coeff, mass_line,
-                    positions, n_atoms, box9, &e_lmp, f_lmp, s_lmp);
+                    positions, n_atoms, box9, NULL, &e_lmp, f_lmp, s_lmp);
 
   assert_true(fabs(e_lammpc - e_lmp) < 1e-8);
   double max_force_delta = 0.0;
@@ -348,6 +357,66 @@ static void check_case(const char *pair_style, const char *pair_coeff,
     finite_difference_force_check(config, config_size, pos_copy, zs, n_atoms,
                                   box9);
   }
+}
+
+static void test_lj_stress_is_virial_with_velocity(void **state) {
+  (void)state;
+  const char *lammps_root = getenv("LAMMPS_ROOT");
+  assert_non_null(lammps_root);
+  char lmp_exe[1024];
+  snprintf(lmp_exe, sizeof(lmp_exe), "%s/bin/lmp", lammps_root);
+  assert_int_equal(access(lmp_exe, X_OK), 0);
+
+  const double box9[9] = {20.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0, 20.0};
+  const double positions[6] = {0.0, 0.0, 0.0, 1.5, 0.0, 0.0};
+  const double velocities[6] = {100.0, 0.0, 0.0, -100.0, 0.0, 0.0};
+  const int z[2] = {29, 29};
+  unsigned char config[16384];
+  const size_t config_size =
+      make_config("lj/cut 10.0", "1 1 1.0 1.0", 29, 63.546, "p p p", config,
+                  sizeof(config));
+  unsigned char step[8192];
+  const size_t step_size =
+      make_step(positions, z, 2, box9, 1, step, sizeof(step));
+
+  double e_lmp = 0.0, f_lmp[6] = {0}, s_lmp[6] = {0};
+  run_lmp_reference(lammps_root, lmp_exe, "lj/cut 10.0", "1 1 1.0 1.0",
+                    "63.546", positions, 2, box9, velocities, &e_lmp, f_lmp,
+                    s_lmp);
+
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+  size_t need = lammpc_potential_result_size_for_force_input(step, step_size);
+  assert_true(need > 0);
+  unsigned char *out = (unsigned char *)malloc(need);
+  assert_non_null(out);
+  size_t wrote = 0;
+  LammpcResult built = lammpc_session_calculate_result(
+      session, step, step_size, out, need, &wrote);
+  if (!built.ok)
+    fail_msg("lammpc build failed: %s", built.message);
+  assert_int_equal(lammpc_session_nve_set_velocities(session, velocities, 6),
+                   0);
+  wrote = 0;
+  LammpcResult moved = lammpc_session_calculate_result(
+      session, step, step_size, out, need, &wrote);
+  if (!moved.ok)
+    fail_msg("lammpc velocity eval failed: %s", moved.message);
+  double e_lammpc = 0.0, f_lammpc[6] = {0}, s_lammpc[9] = {0};
+  decode_result(out, wrote, &e_lammpc, f_lammpc, 2, s_lammpc);
+  free(out);
+  lammpc_session_destroy(session);
+
+  assert_true(fabs(e_lammpc - e_lmp) < 1e-8);
+  for (int i = 0; i < 6; ++i)
+    assert_true(fabs(f_lammpc[i] - f_lmp[i]) < 2e-6);
+  assert_true(fabs(s_lammpc[0] - s_lmp[0]) < 3e-8);
+  assert_true(fabs(s_lammpc[4] - s_lmp[1]) < 3e-8);
+  assert_true(fabs(s_lammpc[8] - s_lmp[2]) < 3e-8);
+  assert_true(fabs(s_lammpc[1] - s_lmp[3]) < 3e-8);
+  assert_true(fabs(s_lammpc[2] - s_lmp[4]) < 3e-8);
+  assert_true(fabs(s_lammpc[5] - s_lmp[5]) < 3e-8);
 }
 
 static void test_eam_alloy_cu_vs_lmp(void **state) {
@@ -385,6 +454,7 @@ static void test_tersoff_si_vs_lmp_triclinic(void **state) {
 
 int main(void) {
   const struct CMUnitTest tests[] = {
+      cmocka_unit_test(test_lj_stress_is_virial_with_velocity),
       cmocka_unit_test(test_eam_alloy_cu_vs_lmp),
       cmocka_unit_test(test_tersoff_si_vs_lmp_triclinic),
   };

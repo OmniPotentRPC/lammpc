@@ -3,10 +3,13 @@
 #include "lammpc_boundary_embed.h"
 
 #include "atom.h"
+#include "compute.h"
 #include "domain.h"
 #include "lammps.h"
 #include "library.h"
 #include "minimage.h"
+#include "modify.h"
+#include "update.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,6 +54,7 @@ struct DecodedParams {
   std::vector<int> type_to_z;
   std::vector<double> masses;
   std::string boundary = "p p p";
+  bool newton_pair = true;
   std::string suffix;
   std::vector<std::string> extra_setup;
 };
@@ -66,6 +70,7 @@ int decode_lammps_params(LammpsParams_ptr params, DecodedParams *out) {
   if (view.boundary.len > 0)
     out->boundary = text_string(view.boundary);
   out->suffix = text_string(view.suffix);
+  out->newton_pair = view.newtonPair != 0;
 
   capn_resolve(&view.pairCoeffs);
   if (view.pairCoeffs.type == CAPN_PTR_LIST ||
@@ -127,6 +132,7 @@ struct LammpcSession {
   size_t n_atoms = 0;
   int has_cell = 0;
   double cell_ang[9] = {0};
+  std::vector<int> geometry_z;
   std::vector<int> atom_types;
   bool md_ready = false;
   LammpcMdConfig md_config = {};
@@ -243,11 +249,205 @@ std::vector<double> fold_far_images(const std::string &boundary,
   return folded;
 }
 
+/* Standard atomic weight in amu for atomic numbers 1 through 118.
+ * Values are the IUPAC conventional standard atomic weights. Elements
+ * with no standard weight use the mass of the longest-lived isotope.
+ * Index 0 is unused. */
+static const double kStandardAtomicWeightAmu[] = {
+    0.0,
+    1.008, /* 1 */
+    4.002602, /* 2 */
+    6.94, /* 3 */
+    9.0121831, /* 4 */
+    10.81, /* 5 */
+    12.011, /* 6 */
+    14.007, /* 7 */
+    15.999, /* 8 */
+    18.998403163, /* 9 */
+    20.1797, /* 10 */
+    22.98976928, /* 11 */
+    24.305, /* 12 */
+    26.9815385, /* 13 */
+    28.085, /* 14 */
+    30.973761998, /* 15 */
+    32.06, /* 16 */
+    35.45, /* 17 */
+    39.948, /* 18 */
+    39.0983, /* 19 */
+    40.078, /* 20 */
+    44.955908, /* 21 */
+    47.867, /* 22 */
+    50.9415, /* 23 */
+    51.9961, /* 24 */
+    54.938044, /* 25 */
+    55.845, /* 26 */
+    58.933194, /* 27 */
+    58.6934, /* 28 */
+    63.546, /* 29 */
+    65.38, /* 30 */
+    69.723, /* 31 */
+    72.630, /* 32 */
+    74.921595, /* 33 */
+    78.971, /* 34 */
+    79.904, /* 35 */
+    83.798, /* 36 */
+    85.4678, /* 37 */
+    87.62, /* 38 */
+    88.90584, /* 39 */
+    91.224, /* 40 */
+    92.90637, /* 41 */
+    95.95, /* 42 */
+    97.90721, /* 43 */
+    101.07, /* 44 */
+    102.90550, /* 45 */
+    106.42, /* 46 */
+    107.8682, /* 47 */
+    112.414, /* 48 */
+    114.818, /* 49 */
+    118.710, /* 50 */
+    121.760, /* 51 */
+    127.60, /* 52 */
+    126.90447, /* 53 */
+    131.293, /* 54 */
+    132.90545196, /* 55 */
+    137.327, /* 56 */
+    138.90547, /* 57 */
+    140.116, /* 58 */
+    140.90766, /* 59 */
+    144.242, /* 60 */
+    144.91276, /* 61 */
+    150.36, /* 62 */
+    151.964, /* 63 */
+    157.25, /* 64 */
+    158.92535, /* 65 */
+    162.500, /* 66 */
+    164.93033, /* 67 */
+    167.259, /* 68 */
+    168.93422, /* 69 */
+    173.054, /* 70 */
+    174.9668, /* 71 */
+    178.49, /* 72 */
+    180.94788, /* 73 */
+    183.84, /* 74 */
+    186.207, /* 75 */
+    190.23, /* 76 */
+    192.217, /* 77 */
+    195.084, /* 78 */
+    196.966569, /* 79 */
+    200.592, /* 80 */
+    204.38, /* 81 */
+    207.2, /* 82 */
+    208.98040, /* 83 */
+    208.98243, /* 84 */
+    209.98715, /* 85 */
+    222.01758, /* 86 */
+    223.01974, /* 87 */
+    226.02541, /* 88 */
+    227.02775, /* 89 */
+    232.0377, /* 90 */
+    231.03588, /* 91 */
+    238.02891, /* 92 */
+    237.04817, /* 93 */
+    244.06421, /* 94 */
+    243.06138, /* 95 */
+    247.07035, /* 96 */
+    247.07031, /* 97 */
+    251.07959, /* 98 */
+    252.0830, /* 99 */
+    257.09511, /* 100 */
+    258.09843, /* 101 */
+    259.1010, /* 102 */
+    262.110, /* 103 */
+    267.122, /* 104 */
+    268.126, /* 105 */
+    271.134, /* 106 */
+    270.133, /* 107 */
+    269.1338, /* 108 */
+    278.156, /* 109 */
+    281.165, /* 110 */
+    281.166, /* 111 */
+    285.177, /* 112 */
+    286.182, /* 113 */
+    289.190, /* 114 */
+    289.194, /* 115 */
+    293.204, /* 116 */
+    293.208, /* 117 */
+    294.214, /* 118 */
+};
+
+
+int mass_for_type(const DecodedParams &params, size_t type_index, double *mass) {
+  if (!mass)
+    return -1;
+  if (type_index < params.masses.size()) {
+    *mass = params.masses[type_index];
+    return 0;
+  }
+  if (type_index >= params.type_to_z.size()) {
+    store_error("atomic number has no standard atomic weight");
+    return -1;
+  }
+  const int z = params.type_to_z[type_index];
+  const size_t known =
+      sizeof(kStandardAtomicWeightAmu) / sizeof(kStandardAtomicWeightAmu[0]);
+  if (z <= 0 || (size_t)z >= known || !(kStandardAtomicWeightAmu[z] > 0.0)) {
+    store_error("atomic number has no standard atomic weight");
+    return -1;
+  }
+  *mass = kStandardAtomicWeightAmu[z];
+  return 0;
+}
+
 int type_for_atomic_number(const DecodedParams &params, int z) {
   for (size_t t = 0; t < params.type_to_z.size(); ++t)
     if (params.type_to_z[t] == z)
       return (int)t + 1;
   return -1;
+}
+
+int assign_atom_types(const DecodedParams &params, const int *atomic_numbers,
+                      size_t n_atoms, std::vector<int> *types,
+                      std::string *error) {
+  if (!types)
+    return -1;
+  types->assign(n_atoms, 0);
+  if (n_atoms > 0 && !atomic_numbers) {
+    if (error)
+      *error = "ForceInput atomic number missing from typeToAtomicNumber";
+    return -1;
+  }
+  std::vector<char> consumed(params.type_to_z.size(), 0);
+  for (size_t i = 0; i < n_atoms; ++i) {
+    const int z = atomic_numbers[i];
+    int available = 0;
+    for (int mapped : params.type_to_z)
+      if (mapped == z)
+        ++available;
+    if (available == 0) {
+      if (error)
+        *error = "ForceInput atomic number missing from typeToAtomicNumber";
+      return -1;
+    }
+    if (available == 1) {
+      (*types)[i] = type_for_atomic_number(params, z);
+      continue;
+    }
+    int chosen = -1;
+    for (size_t t = 0; t < params.type_to_z.size(); ++t) {
+      if (consumed[t] || params.type_to_z[t] != z)
+        continue;
+      consumed[t] = 1;
+      chosen = (int)t + 1;
+      break;
+    }
+    if (chosen < 1) {
+      if (error)
+        *error = "duplicate atomic number has no remaining LAMMPS type";
+      return -1;
+    }
+    (*types)[i] = chosen;
+  }
+  return 0;
 }
 
 int run_cmd(void *lmp, const std::string &cmd) {
@@ -269,15 +469,45 @@ void destroy_instance(LammpcSession *session) {
   lammps_close(session->lmp);
   session->lmp = nullptr;
   session->md_ready = false;
+  session->geometry_z.clear();
   session->nve_fix_installed = false;
   session->nve_positions.clear();
   session->nve_velocities.clear();
+}
+
+int reject_atom_count_mismatch(void *lmp, size_t n_atoms, const char *when) {
+  auto *atom_data = static_cast<LAMMPS_NS::LAMMPS *>(lmp)->atom;
+  const long long present = (long long)std::llround(lammps_get_natoms(lmp));
+  if (present == (long long)n_atoms && atom_data->nlocal == (int)n_atoms)
+    return 0;
+  char mismatch[256] = {0};
+  std::snprintf(mismatch, sizeof(mismatch),
+                "atom count mismatch %s: requested=%zu present=%lld", when,
+                n_atoms, present);
+  store_error(mismatch);
+  return -1;
+}
+
+int reject_nonfinite_cell(const double *cell_ang) {
+  if (!cell_ang) {
+    store_error("cell entries must be finite");
+    return -1;
+  }
+  for (int i = 0; i < 9; ++i) {
+    if (!std::isfinite(cell_ang[i])) {
+      store_error("cell entries must be finite");
+      return -1;
+    }
+  }
+  return 0;
 }
 
 int build_instance(LammpcSession *session, size_t n_atoms,
                    const double *positions_ang, const int *atomic_numbers,
                    const double *cell_ang, int has_cell) {
   destroy_instance(session);
+  if (has_cell && reject_nonfinite_cell(cell_ang) != 0)
+    return -1;
   const DecodedParams &p = session->params;
 
   char arg0[] = "lammpc";
@@ -376,7 +606,11 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   }
 
   for (size_t t = 0; t < p.type_to_z.size(); ++t) {
-    double mass = (t < p.masses.size()) ? p.masses[t] : 1.0;
+    double mass = 0.0;
+    if (mass_for_type(p, t, &mass) != 0) {
+      lammps_close(lmp);
+      return -1;
+    }
     if (run_cmd(lmp, "mass " + std::to_string((int)t + 1) + " " +
                          format_double17(mass)) != 0) {
       lammps_close(lmp);
@@ -384,15 +618,12 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     }
   }
 
-  session->atom_types.assign(n_atoms, 0);
-  for (size_t i = 0; i < n_atoms; ++i) {
-    int type = type_for_atomic_number(p, atomic_numbers[i]);
-    if (type < 1) {
-      store_error("ForceInput atomic number missing from typeToAtomicNumber");
-      lammps_close(lmp);
-      return -1;
-    }
-    session->atom_types[i] = type;
+  std::string assign_error;
+  if (assign_atom_types(p, atomic_numbers, n_atoms, &session->atom_types,
+                        &assign_error) != 0) {
+    store_error(assign_error);
+    lammps_close(lmp);
+    return -1;
   }
 
   if (n_atoms > (size_t)std::numeric_limits<int>::max()) {
@@ -502,6 +733,10 @@ int build_instance(LammpcSession *session, size_t n_atoms,
     lammps_close(lmp);
     return -1;
   }
+  if (run_cmd(lmp, p.newton_pair ? "newton on on" : "newton off on") != 0) {
+    lammps_close(lmp);
+    return -1;
+  }
   if (run_cmd(lmp, "pair_style " + p.pair_style) != 0) {
     lammps_close(lmp);
     return -1;
@@ -518,8 +753,17 @@ int build_instance(LammpcSession *session, size_t n_atoms,
       return -1;
     }
   }
-  if (run_cmd(lmp, "thermo_style custom step pe ke pxx pyy pzz pxy pxz pyz") != 0 ||
+  if (run_cmd(lmp, "compute lammpc_virial all pressure NULL virial") != 0 ||
+      run_cmd(lmp, "thermo_style custom step pe ke "
+                   "pxx pyy pzz pxy pxz pyz "
+                   "c_lammpc_virial[1] c_lammpc_virial[2] c_lammpc_virial[3] "
+                   "c_lammpc_virial[4] c_lammpc_virial[5] c_lammpc_virial[6]") !=
+          0 ||
       run_cmd(lmp, "run 0") != 0) {
+    lammps_close(lmp);
+    return -1;
+  }
+  if (reject_atom_count_mismatch(lmp, n_atoms, "after setup") != 0) {
     lammps_close(lmp);
     return -1;
   }
@@ -527,17 +771,34 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   session->lmp = lmp;
   session->n_atoms = n_atoms;
   session->has_cell = has_cell;
+  session->geometry_z.assign(atomic_numbers, atomic_numbers + n_atoms);
   std::memcpy(session->cell_ang, cell_ang, sizeof(session->cell_ang));
   return 0;
 }
 
 bool geometry_matches(const LammpcSession *session, size_t n_atoms,
-                      const double *cell_ang, int has_cell) {
-  if (!session->lmp || session->n_atoms != n_atoms || session->has_cell != has_cell)
+                      const int *atomic_numbers, const double *cell_ang,
+                      int has_cell) {
+  if (!session->lmp || session->n_atoms != n_atoms ||
+      session->has_cell != has_cell)
     return false;
   for (int i = 0; i < 9; ++i)
     if (session->cell_ang[i] != cell_ang[i])
       return false;
+  if (!atomic_numbers || session->geometry_z.size() != n_atoms ||
+      session->atom_types.size() != n_atoms)
+    return false;
+  std::vector<int> assigned;
+  if (assign_atom_types(session->params, atomic_numbers, n_atoms, &assigned,
+                        nullptr) != 0 ||
+      assigned.size() != session->atom_types.size())
+    return false;
+  for (size_t i = 0; i < n_atoms; ++i) {
+    if (session->geometry_z[i] != atomic_numbers[i])
+      return false;
+    if (assigned[i] != session->atom_types[i])
+      return false;
+  }
   return true;
 }
 
@@ -547,6 +808,8 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
     store_error("no live LAMMPS session");
     return -1;
   }
+  if (reject_atom_count_mismatch(session->lmp, n_atoms, "before gather") != 0)
+    return -1;
   if (session->has_cell) {
     std::vector<double> folded = fold_far_images(
         session->params.boundary, session->cell_ang, n_atoms, positions_ang);
@@ -565,12 +828,30 @@ int evaluate(LammpcSession *session, size_t n_atoms, const double *positions_ang
   const double pe_ev = lammps_get_thermo(session->lmp, "pe");
   *energy_h = pe_ev / kEvPerHartree;
 
-  const double sxx = lammps_get_thermo(session->lmp, "pxx");
-  const double syy = lammps_get_thermo(session->lmp, "pyy");
-  const double szz = lammps_get_thermo(session->lmp, "pzz");
-  const double sxy = lammps_get_thermo(session->lmp, "pxy");
-  const double sxz = lammps_get_thermo(session->lmp, "pxz");
-  const double syz = lammps_get_thermo(session->lmp, "pyz");
+  auto *lammps = static_cast<LAMMPS_NS::LAMMPS *>(session->lmp);
+  LAMMPS_NS::Compute *virial =
+      lammps->modify->get_compute_by_id("lammpc_virial");
+  if (!virial || !virial->vector) {
+    store_error("virial pressure compute is missing");
+    return -1;
+  }
+  if (virial->invoked_vector != lammps->update->ntimestep)
+    virial->compute_vector();
+  if (lammps_has_error(session->lmp)) {
+    char buffer[512] = {0};
+    if (lammps_get_last_error_message(session->lmp, buffer, (int)sizeof(buffer)) >
+        0)
+      store_error(buffer);
+    else
+      store_error("virial pressure was not evaluated");
+    return -1;
+  }
+  const double sxx = virial->vector[0];
+  const double syy = virial->vector[1];
+  const double szz = virial->vector[2];
+  const double sxy = virial->vector[3];
+  const double sxz = virial->vector[4];
+  const double syz = virial->vector[5];
   const double evA3_to_hbohr3 =
       (1.0 / kEvPerHartree) * std::pow(kAngstromPerBohr, 3.0);
   const double c = -(1.0 / kBarPerEvA3) * evA3_to_hbohr3;
@@ -807,8 +1088,9 @@ int reject_common_overlay(CommonMethodSpec_ptr common) {
   capn_resolve(&view.xcFunctionals);
   capn_resolve(&view.kMesh.p);
   int has_any = view.xcFunctionals.len > 0 || view.basisSet.len > 0 ||
-                view.planewaveCutoffEv > 0.0 || view.charge != 0 ||
-                view.spinMultiplicity > 0 || view.scfEnergyToleranceEv > 0.0 ||
+                view.planewaveCutoffEv > 0.0 || view.hasCharge ||
+                view.charge != 0 || view.spinMultiplicity > 0 ||
+                view.scfEnergyToleranceEv > 0.0 ||
                 view.scfMaxIterations > 0 || view.kMesh.p.len > 0 ||
                 view.vanDerWaalsMethod.len > 0 ||
                 view.relativityMethod.len > 0 || view.vanDerWaalsS6 > 0.0;
@@ -973,7 +1255,13 @@ int lammpc_session_md_initialize(
     size_t force_input_capnp_size_bytes, const double *point,
     const double *normal, size_t coordinate_count,
     const LammpcMdConfig *config) {
-  if (!session || !point || !normal || !config) {
+  if (!session) {
+    store_error("md_initialize received a null argument");
+    return -1;
+  }
+  /* A failed reinit must not leave the previous trajectory runnable. */
+  session->md_ready = false;
+  if (!point || !normal || !config) {
     store_error("md_initialize received a null argument");
     return -1;
   }
@@ -1021,7 +1309,8 @@ int lammpc_session_md_initialize(
   }
   lammpc_params_release(&arena);
 
-  if (!geometry_matches(session, n_atoms, cell_ang, has_cell) &&
+  if (!geometry_matches(session, n_atoms, atomic_numbers.data(), cell_ang,
+                        has_cell) &&
       build_instance(session, n_atoms, positions.data(), atomic_numbers.data(),
                      cell_ang, has_cell) != 0)
     return -1;
@@ -1034,32 +1323,71 @@ int lammpc_session_md_initialize(
   session->md_forces.assign(coordinate_count, 0.0);
   session->md_removed_velocities.assign(coordinate_count, 0.0);
   session->md_masses.assign(coordinate_count, 0.0);
-  double normal_norm2 = 0.0;
+  double max_abs_normal = 0.0;
   for (size_t i = 0; i < coordinate_count; ++i) {
     if (!std::isfinite(point[i]) || !std::isfinite(normal[i])) {
       store_error("plane point and normal must be finite");
       return -1;
     }
-    normal_norm2 += normal[i] * normal[i];
+    const double abs_normal = std::fabs(normal[i]);
+    if (abs_normal > max_abs_normal)
+      max_abs_normal = abs_normal;
     const size_t atom = i / 3u;
     const int type = session->atom_types[atom];
-    const double mass =
-        (type > 0 && (size_t)type <= session->params.masses.size())
-            ? session->params.masses[(size_t)type - 1u]
-            : 1.0;
+    if (type <= 0) {
+      store_error("constrained MD needs finite positive masses");
+      return -1;
+    }
+    double mass = 0.0;
+    if (mass_for_type(session->params, (size_t)type - 1u, &mass) != 0)
+      return -1;
     if (!(std::isfinite(mass) && mass > 0.0)) {
       store_error("constrained MD needs finite positive masses");
       return -1;
     }
     session->md_masses[i] = mass;
   }
-  if (!(normal_norm2 > 0.0)) {
+  if (!std::isfinite(max_abs_normal)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  if (!(max_abs_normal > 0.0)) {
     store_error("plane normal vanishes");
     return -1;
   }
-  const double inverse_normal_norm = 1.0 / std::sqrt(normal_norm2);
-  for (double &value : session->md_normal)
-    value *= inverse_normal_norm;
+  double scaled_norm2 = 0.0;
+  for (size_t i = 0; i < coordinate_count; ++i) {
+    const double scaled = normal[i] / max_abs_normal;
+    scaled_norm2 += scaled * scaled;
+  }
+  if (!std::isfinite(scaled_norm2)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  if (!(scaled_norm2 > 0.0)) {
+    store_error("plane normal vanishes");
+    return -1;
+  }
+  const double inverse_scaled_norm = 1.0 / std::sqrt(scaled_norm2);
+  if (!std::isfinite(inverse_scaled_norm)) {
+    store_error("plane point and normal must be finite");
+    return -1;
+  }
+  double normalized_peak = 0.0;
+  for (double &value : session->md_normal) {
+    value = (value / max_abs_normal) * inverse_scaled_norm;
+    if (!std::isfinite(value)) {
+      store_error("plane point and normal must be finite");
+      return -1;
+    }
+    const double abs_value = std::fabs(value);
+    if (abs_value > normalized_peak)
+      normalized_peak = abs_value;
+  }
+  if (!(normalized_peak > 0.0)) {
+    store_error("plane normal vanishes");
+    return -1;
+  }
   if (config->coordinates == LAMMPC_PLANE_CARTESIAN &&
       !(md_plane_denominator(session) > 0.0)) {
     store_error("Cartesian plane has a zero mass-metric denominator");
@@ -1276,6 +1604,8 @@ int lammpc_session_nve_set_positions(LammpcSession *session,
     return -1;
   }
   if (cell_ang) {
+    if (reject_nonfinite_cell(cell_ang) != 0)
+      return -1;
     if (std::fabs(cell_ang[1]) > 1e-12 || std::fabs(cell_ang[2]) > 1e-12 ||
         std::fabs(cell_ang[5]) > 1e-12) {
       store_error("nve_set_positions supports restricted triclinic boxes only");
@@ -1459,7 +1789,8 @@ LammpcResult lammpc_session_calculate_result(
   }
   lammpc_params_release(&arena);
 
-  if (!geometry_matches(session, n_atoms, cell_ang, has_cell)) {
+  if (!geometry_matches(session, n_atoms, atomic_numbers.data(), cell_ang,
+                        has_cell)) {
     if (build_instance(session, n_atoms, positions_ang.data(),
                        atomic_numbers.data(), cell_ang, has_cell) != 0)
       return fail_result(g_last_error);
@@ -1589,7 +1920,13 @@ LammpcResult lammpc_energy_forces(int, const double *, const int *, const void *
   return fail_result("lammpc: raw-array calls need a session");
 }
 
-const char *lammpc_version(void) { return "lammpc/api"; }
+#ifndef LAMMPC_VERSION_STRING
+#define LAMMPC_VERSION_STRING "unknown"
+#endif
+
+const char *lammpc_version(void) {
+  return "lammpc/" LAMMPC_VERSION_STRING;
+}
 int lammpc_abi_version(void) { return LAMMPC_ABI_VERSION; }
 int lammpc_available(void) { return 1; }
 void lammpc_finalize(void) {}

@@ -57,7 +57,7 @@ typedef enum LammpcPlaneCoordinates {
 typedef struct LammpcMdConfig {
   double time_step_ps;       /**< Finite positive time step in ps. */
   double thermal_energy_ev;  /**< Finite positive thermal energy in eV. */
-  double friction_per_ps;    /**< Finite positive friction in ps^-1. */
+  double friction_per_ps;    /**< Finite, non-negative friction in ps^-1. */
   unsigned long long seed;   /**< Deterministic RNG seed. Zero is valid. */
   LammpcPlaneCoordinates coordinates; /**< Plane coordinate convention. */
 } LammpcMdConfig;

@@ -8,8 +8,8 @@ Encode `LammpsParams` or a `PotentialConfig` with the pinned
 1. `pairStyle`.
 2. At least one entry in `typeToAtomicNumber`.
 3. Any `pairCoeffs` required by the selected pair style.
-4. Positive `masses` when molecular dynamics will use values other than the
-   one atomic mass unit fallback.
+4. Explicit positive `masses` when a type should not use the standard atomic
+   weight of its atomic number.
 
 Leave `unitsStyle` empty or set it to `metal`. Leave `atomStyle` empty or set
 it to `atomic`. The embed rejects every other value, including
@@ -52,7 +52,7 @@ if (!result.ok) {
 ```
 
 The first evaluation creates atoms and the LAMMPS box. Later evaluations reuse
-the live instance when atom count and cell match. `PotentialResult` uses the
+the live instance when atom count, atomic numbers, and cell match. `PotentialResult` uses the
 energy and length units requested by `ForceInput`. The scalar
 `LammpcResult.energy_h` always uses Hartree.
 
@@ -64,13 +64,14 @@ The complete executable version of this flow is
 First create a configured session. Then call
 `lammpc_session_md_initialize()` with a valid `ForceInput`, a plane point, a
 nonzero plane normal, and one coordinate for each Cartesian degree of
-freedom. Every control in `LammpcMdConfig` must be finite and positive except
-the seed, which may be zero.
+freedom. Time step and thermal energy must be finite and positive. Friction
+must be finite and non-negative. Zero friction is projected velocity Verlet.
+The seed may be zero.
 
 Use picoseconds for time, electronvolts for thermal energy, reciprocal
 picoseconds for friction, angstroms for Cartesian positions, and atomic mass
-units for masses. The stepper is BAOAB with force, velocity, and stochastic
-increments projected onto the selected plane.
+units for masses. Positive friction uses BAOAB. Force, velocity, and
+stochastic increments are projected onto the selected plane.
 
 ```c
 LammpcMdConfig md = {

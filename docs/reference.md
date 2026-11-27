@@ -109,7 +109,7 @@ outside the contract.
 
 | Function | Contract |
 | --- | --- |
-| `lammpc_version` | Returns library owned static text. |
+| `lammpc_version` | Returns library owned static text. The embed string is `lammpc/` plus the project version. The stub string is `lammpc-stub/` plus that version. |
 | `lammpc_abi_version` | Returns `LAMMPC_ABI_VERSION`, currently zero. |
 | `lammpc_available` | Returns one for the embed and zero for the stub. |
 | `lammpc_last_error` | Returns a nonnull pointer to the calling thread's 512 byte error buffer in the embed, or a fixed static string in the stub. |
@@ -141,9 +141,9 @@ loaded library. Callers must not free or modify them.
 | `lammpc_session_destroy` | Releases callback, LAMMPS, and session state. `NULL` is accepted. |
 
 The parameter defaults are `metal`, `atomic`, and `p p p`. `pairStyle` and
-`typeToAtomicNumber` are required. `masses` defaults each omitted type to one
-atomic mass unit in the current implementation. Supply explicit positive
-masses for physical dynamics.
+`typeToAtomicNumber` are required. An omitted `masses` entry uses the
+standard atomic weight of that type's atomic number. Atomic numbers outside
+1 through 118 are rejected. An explicit mass replaces the standard weight.
 
 `PotentialConfig.common` must have no fields set. Classical LAMMPS force
 fields do not lower the electronic structure overlay. The selected union arm
@@ -203,9 +203,13 @@ the fixed unavailable message and do not modify the size output.
 Geometry requires at least one atom, exactly three positions per atomic
 number, and either zero or nine cell entries.
 
-Cells use row major restricted triclinic form. Entries 1, 2, and 5 must be
-zero within `1e-12`. Diagonal entries must be positive. Atomic numbers must
-exist in `typeToAtomicNumber`.
+Cells use row major restricted triclinic form. Every entry must be finite.
+Entries 1, 2, and 5 must be zero within `1e-12`. Diagonal entries must be
+positive. Atomic numbers must
+exist in `typeToAtomicNumber`. A number listed once is shared by every atom
+of that number. A number listed on several types is assigned in list order,
+one unused type per atom, and another atom after those types are used is
+rejected.
 
 ## Projected MD
 
@@ -216,8 +220,9 @@ exist in `typeToAtomicNumber`.
 | `lammpc_session_md_state` | Copies selected state arrays and counters. |
 
 Initialization requires nonnull pointers, a coordinate count equal to three
-times atom count, a finite nonzero normal, and finite point values. Time step,
-thermal energy, and friction must be finite and greater than zero. The seed
+times atom count, a finite nonzero normal, and finite point values. Time step
+and thermal energy must be finite and greater than zero. Friction must be
+finite and non-negative. Zero friction is projected velocity Verlet. The seed
 has no reserved value. Zero is deterministic.
 
 Mass weighted coordinates interpret `point` in `sqrt(amu) * angstrom` and the
