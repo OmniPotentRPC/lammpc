@@ -755,6 +755,7 @@ int build_instance(LammpcSession *session, size_t n_atoms,
   }
   if (run_cmd(lmp, "compute lammpc_virial all pressure NULL virial") != 0 ||
       run_cmd(lmp, "thermo_style custom step pe ke "
+                   "pxx pyy pzz pxy pxz pyz "
                    "c_lammpc_virial[1] c_lammpc_virial[2] c_lammpc_virial[3] "
                    "c_lammpc_virial[4] c_lammpc_virial[5] c_lammpc_virial[6]") !=
           0 ||
