@@ -1973,6 +1973,54 @@ static void test_failed_md_reinit_stops_later_steps(void **state) {
   lammpc_session_destroy(session);
 }
 
+static void test_early_md_reinit_failure_stops_the_trajectory(void **state) {
+  (void)state;
+  unsigned char config[8192];
+  const size_t config_size = make_config(config, sizeof(config));
+  unsigned char step[4096];
+  const size_t step_size = make_step(3.0, step, sizeof(step));
+  LammpcSession *session =
+      lammpc_session_create_from_config(config, config_size);
+  assert_non_null(session);
+
+  const double inverse_sqrt_two = 1.0 / sqrt(2.0);
+  const double point[6] = {0.0, 0.0, 0.0, 3.0, 0.0, 0.0};
+  const double normal[6] = {-inverse_sqrt_two, 0.0, 0.0,
+                            inverse_sqrt_two,  0.0, 0.0};
+  const LammpcMdConfig controls = {
+      .time_step_ps = 0.001,
+      .thermal_energy_ev = 0.05,
+      .friction_per_ps = 0.0,
+      .seed = 7,
+      .coordinates = LAMMPC_PLANE_MASS_WEIGHTED,
+  };
+  LammpcMdConfig rejected = controls;
+  rejected.time_step_ps = 0.0;
+
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+
+  assert_int_equal(lammpc_session_md_initialize(session, step, step_size, point,
+                                                normal, 6, &rejected),
+                   -1);
+  assert_non_null(strstr(lammpc_last_error(),
+                         "timestep and thermal energy must be finite"));
+  LammpcMdObservation observation;
+  assert_int_equal(lammpc_session_md_step(session, 1), -1);
+  assert_string_equal(lammpc_last_error(), "constrained MD is not initialized");
+  assert_int_equal(lammpc_session_md_state(session, NULL, NULL, NULL, NULL, 6,
+                                           &observation),
+                   -1);
+
+  assert_int_equal(lammpc_session_md_initialize(
+                       session, step, step_size, point, normal, 6, &controls),
+                   0);
+  assert_int_equal(lammpc_session_md_step(session, 1), 0);
+  lammpc_session_destroy(session);
+}
+
 static void test_explicit_zero_charge_is_rejected(void **state) {
   (void)state;
   struct capn arena;
@@ -2077,6 +2125,7 @@ int main(void) {
       cmocka_unit_test(test_omitted_mass_uses_standard_weight),
       cmocka_unit_test(test_nonfinite_cell_is_rejected),
       cmocka_unit_test(test_failed_md_reinit_stops_later_steps),
+      cmocka_unit_test(test_early_md_reinit_failure_stops_the_trajectory),
       cmocka_unit_test(test_explicit_zero_charge_is_rejected),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

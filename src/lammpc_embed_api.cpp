@@ -1255,7 +1255,13 @@ int lammpc_session_md_initialize(
     size_t force_input_capnp_size_bytes, const double *point,
     const double *normal, size_t coordinate_count,
     const LammpcMdConfig *config) {
-  if (!session || !point || !normal || !config) {
+  if (!session) {
+    store_error("md_initialize received a null argument");
+    return -1;
+  }
+  /* A failed reinit must not leave the previous trajectory runnable. */
+  session->md_ready = false;
+  if (!point || !normal || !config) {
     store_error("md_initialize received a null argument");
     return -1;
   }
@@ -1309,8 +1315,6 @@ int lammpc_session_md_initialize(
                      cell_ang, has_cell) != 0)
     return -1;
 
-  /* A failed reinit must not leave the previous trajectory runnable. */
-  session->md_ready = false;
   session->md_config = *config;
   session->md_point.assign(point, point + coordinate_count);
   session->md_normal.assign(normal, normal + coordinate_count);
